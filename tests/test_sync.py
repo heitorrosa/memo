@@ -1,6 +1,7 @@
 """Task 6 tests: skill_sync dual-mode + L0 join (spec §§20-21)."""
 
 from memo import db, skills
+from memo import prompts as prompt_store
 
 
 def _mem(tmp_path):
@@ -231,3 +232,38 @@ def test_malformed_harness_not_found(tmp_path):
     assert skills.sync(conn, "")["error"] == "not_found"
     assert skills.sync(conn, None)["error"] == "not_found"  # type: ignore[arg-type]
     conn.close()
+
+
+def test_sync_prompt_teaches_self_evaluation():
+    # The decision surface is the agent judging its OWN persistence, then
+    # mapping that verdict to a declaration -- not a name lookup.
+    text = prompt_store.render("tool_skill_sync")
+    for needle in (
+        "SELF-EVALUATION",
+        "Can I write files that persist across sessions?",
+        "skill-create or file-write tool",
+        "materialized a skill file before",
+        "sandbox-only with no persistence",
+        "declare the file capabilities (skill_create, file_write)",
+        "receive a file delta",
+        "declare that you have no persistence and receive the L0 index bundle",
+        "FALLBACKS for undeclared calls",
+        "apply deletes THEN writes",
+        "the database row remains truth",
+        "re-calls sync with a filter",
+    ):
+        assert needle in text, f"missing self-evaluation instruction: {needle!r}"
+
+
+def test_sync_prompt_keeps_fallback_and_shape():
+    # Legacy hints and the unknown-no-caps default stay stated as server
+    # fallback, and the receipt shapes (mode/fields/offset) are unchanged.
+    text = prompt_store.render("tool_skill_sync")
+    assert "opencode, claude-code, filesystem" in text  # legacy hint
+    assert "web -> bundle" in text
+    assert "unknown-no-caps -> bundle" in text
+    assert "files_to_write (path, content, hash)" in text
+    assert "files_to_delete (path)" in text
+    assert "offset, total" in text
+    assert "bootstrap_md, truncated, total" in text
+    assert "not_found" in text
