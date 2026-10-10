@@ -3,10 +3,9 @@ skills.sync tails; scheduler-daily hits the same function (no 2nd path).
 
 Peewee-backed: moves go through the ORM Memory/ArchivedMemory/Episode/
 Skill models bound to conn's own file (db.orm_db); energy math, grace,
-vetoes, budgets, and the signal-only log are untouched. ORM imports stay
-lazy inside functions so the top-level import graph is still temporal-only
-(tails call IN here via lazy import — this module must not import
-memory/skills back).
+vetoes, budgets, and the signal-only log are untouched. ORM imports live
+at top level (no cycle: db/models never import maintenance, and the
+save/sync tails import this module, never the reverse).
 """
 from __future__ import annotations
 
@@ -15,7 +14,13 @@ import os
 import sqlite3
 import sys
 
+from memo import db as memo_db
 from memo import temporal
+from memo.models import orm as orm_models
+from memo.models.orm import ArchivedMemory as OrmArchived
+from memo.models.orm import Episode as OrmEpisode
+from memo.models.orm import Memory as OrmMemory
+from memo.models.orm import Skill as OrmSkill
 
 CAP = 250
 GRACE_DAYS = 1.0
@@ -49,11 +54,6 @@ def touched_after(updated_at: str, t0) -> bool:
 
 
 def archive_row(conn, key, namespace, now_iso, reason):
-    from memo import db as memo_db
-    from memo.models import orm as orm_models
-    from memo.models.orm import ArchivedMemory as OrmArchived
-    from memo.models.orm import Memory as OrmMemory
-
     peewee_db = memo_db.orm_db(conn)
     with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         row = OrmMemory.get_or_none(
@@ -80,9 +80,6 @@ def archive_row(conn, key, namespace, now_iso, reason):
 
 def pick_victim(conn, namespace, now) -> str | None:
     """argmin (uses/max(age,1))*exp(-age/S) over grace-passing currents."""
-    from memo import db as memo_db
-    from memo.models.orm import Memory as OrmMemory
-
     with memo_db.orm_ctx(conn):
         rows = list((OrmMemory.select(
             OrmMemory.key, OrmMemory.uses, OrmMemory.stability,
@@ -104,12 +101,6 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
         now: str | None = None) -> dict:
     """One bounded pass; idempotent. Returns
     {evicted: key|None, archived: [keys], rolled_up: episodes_created}."""
-    from memo import db as memo_db
-    from memo.models import orm as orm_models
-    from memo.models.orm import Episode as OrmEpisode
-    from memo.models.orm import Memory as OrmMemory
-    from memo.models.orm import Skill as OrmSkill
-
     sweep_time = temporal.parse_ts(now) if now else temporal.parse_ts(
         temporal.now_iso())
     now_iso = temporal.now_iso()

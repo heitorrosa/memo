@@ -13,6 +13,10 @@ Embeddings stay raw BLOB bytes (embeddings.py owns encode/cosine).
 """
 from __future__ import annotations
 
+import os
+import sqlite3
+import tempfile
+
 from peewee import SqliteDatabase
 
 database = SqliteDatabase(None)
@@ -57,12 +61,6 @@ MODELS = [MemoMeta, Memory, MemoryFTS, ArchivedMemory, Episode, Skill]
 def render_schema() -> str:
     """Build the full schema text from Models: create_tables on a scratch
     DB, apply the raw tail, dump sqlite_master in creation order."""
-    import os
-    import sqlite3
-    import tempfile
-
-    from peewee import SqliteDatabase
-
     handle, path = tempfile.mkstemp(suffix=".db")
     os.close(handle)
     try:

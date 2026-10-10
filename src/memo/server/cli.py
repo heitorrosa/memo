@@ -7,6 +7,9 @@ import os
 import sqlite3
 import sys
 
+import httpx
+import uvicorn
+
 from memo import db
 from memo.server.core import build_server, dump_tool_names
 from memo.server.http import build_http_app
@@ -46,8 +49,6 @@ def refuse_if_locked(path: str) -> bool:
 
 
 def health_probe(url: str) -> int:
-    import httpx
-
     try:
         response = httpx.get(url, timeout=10.0)
         healthy = response.status_code == 200 and response.json().get("ok") is True
@@ -123,8 +124,6 @@ def main_http(argv: list[str] | None = None) -> int:
         return 2
     server = build_server(args.db, memory_on, skills_on)
     print(startup_line(args.db, db.HAS_VEC, memory_on, skills_on), file=sys.stderr)
-    import uvicorn
-
     uvicorn.run(build_http_app(server, token), host=args.host, port=args.port,
                 log_level="warning")
     return 0

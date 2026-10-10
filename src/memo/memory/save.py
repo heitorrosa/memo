@@ -14,6 +14,7 @@ from rapidfuzz import fuzz
 
 from memo import db as memo_db
 from memo import embeddings, temporal
+from memo import maintenance
 from memo.memory.common import (
     FUZZ_HIT,
     STABILITY,
@@ -150,8 +151,6 @@ save = original_save
 
 def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",  # noqa: F811 — tail wraps the ladder above
          namespace: str = "default", valid_from=None) -> dict:
-    from memo import maintenance
-
     call_start = temporal.now_iso()
     receipt = original_save(conn, key, value, type=type, namespace=namespace,
                          valid_from=valid_from)

@@ -1,9 +1,12 @@
 """Server build: connection, FastMCP tool registration, tool listing."""
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import sys
 import threading
+
+from mcp.server.fastmcp import FastMCP
 
 from memo import db
 from memo.server.bootstrap import bootstrap_text
@@ -45,8 +48,6 @@ def server_connect(path: str) -> sqlite3.Connection:
 
 def build_server(db_path: str, memory_on: bool | None = None,
                  skills_on: bool | None = None):
-    from mcp.server.fastmcp import FastMCP
-
     if memory_on is None or skills_on is None:
         env_memory, env_skills = resolve_domains()
         memory_on = env_memory if memory_on is None else memory_on
@@ -121,6 +122,4 @@ def build_server(db_path: str, memory_on: bool | None = None,
 
 
 def dump_tool_names(server) -> list[str]:
-    import asyncio
-
     return sorted(tool.name for tool in asyncio.run(server.list_tools()))

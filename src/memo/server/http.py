@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import hmac
+from contextlib import asynccontextmanager
+
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
 from memo import db
 from memo.server.shared import VERSION
@@ -37,12 +42,6 @@ class BearerAuth:
 
 
 def build_http_app(server, token: str):
-    from contextlib import asynccontextmanager
-
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Mount, Route
-
     async def health_check(request):
         return JSONResponse({"ok": True, "version": VERSION,
                              "vec": "vec" if db.HAS_VEC else "bruteforce"})

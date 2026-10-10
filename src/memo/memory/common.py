@@ -9,7 +9,12 @@ import math
 import re
 import sqlite3
 
+from peewee import SQL
+
+from memo import db as memo_db
 from memo import embeddings, temporal
+from memo.models.orm import Memory as OrmMemory
+from memo.models.orm import MemoryFTS
 
 STABILITY = {"preference": 14.0, "feedback": 10.0, "analysis": 7.0, "context": 3.0}
 BETA, R_FLOOR, S_CAP_X = 0.3, 0.05, 4.0
@@ -39,9 +44,6 @@ ARCHIVE_COLUMNS = ("key,namespace,value,type,embedding,stability,score,uses,"
 
 
 def fetch_row(conn, key, namespace):
-    from memo import db as memo_db
-    from memo.models.orm import Memory as OrmMemory
-
     with memo_db.orm_ctx(conn):
         row = OrmMemory.get_or_none(
             (OrmMemory.key == key) & (OrmMemory.namespace == namespace))
@@ -80,11 +82,6 @@ def grow_stability(stability: float, kind: str, age_days: float) -> float:
 
 
 def fts_scores(conn, query: str) -> dict[int, float]:
-    from peewee import SQL
-
-    from memo import db as memo_db
-    from memo.models.orm import MemoryFTS
-
     query_tokens = [token for token in re.findall(r"[A-Za-z0-9_]+", query) if len(token) > 1]
     if not query_tokens:
         return {}

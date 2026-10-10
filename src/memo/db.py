@@ -15,8 +15,10 @@ from __future__ import annotations
 import sqlite3
 
 from peewee import SqliteDatabase
+from playhouse.migrate import SqliteMigrator
 
 from memo.models import orm as orm_models
+from memo.models import render_schema as _render
 from memo.models.orm import database as peewee_database
 
 MEMO_SCHEMA_VERSION = 3
@@ -86,8 +88,6 @@ def atomic():
 
 def migrator():
     """SqliteMigrator bound to the ORM database (structured migrations)."""
-    from playhouse.migrate import SqliteMigrator
-
     return SqliteMigrator(peewee_database)
 
 
@@ -136,8 +136,6 @@ def migrate(conn: sqlite3.Connection) -> int:
         with peewee_db.bind_ctx(orm_models.CREATE_MODELS):
             peewee_db.create_tables(orm_models.CREATE_MODELS, safe=True)
     else:
-        from memo.models import render_schema as _render
-
         with conn:
             conn.executescript(_render())
             return _seed(conn)
@@ -154,8 +152,6 @@ def _seed(conn: sqlite3.Connection) -> int:
             (key, value),
         )
     if MIGRATIONS:
-        from playhouse.migrate import SqliteMigrator
-
         try:
             path = conn.execute("PRAGMA database_list").fetchone()[2]
         except Exception:

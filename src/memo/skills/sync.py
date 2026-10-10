@@ -5,6 +5,7 @@ import sqlite3
 
 from memo import errors
 from memo import db as memo_db
+from memo import maintenance
 from memo.models.orm import Skill
 from memo.skills.crud import build_frontmatter, l0_line
 
@@ -132,15 +133,13 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
 
 
 # L4 tail (Task 7, additive §23): janitor at the END of every skill_sync.
-# Logic above untouched; lazy import keeps the skills→memory ban intact.
+# Logic above untouched (top-level import: maintenance never imports back).
 original_sync = sync
 
 
 def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None,  # noqa: F811 — tail wraps the sync above
          filter: str | None = None, offset: int = 0,
          limit: int | None = None) -> dict:
-    from memo import maintenance
-
     out = original_sync(conn, harness, known=known, filter=filter,
                      offset=offset, limit=limit)
     maintenance.run(conn)

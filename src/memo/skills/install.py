@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import httpx
+
 from memo import errors
 from memo.skills.crud import build_frontmatter, get, put
 
@@ -23,8 +25,6 @@ def split_frontmatter(text: str) -> tuple[dict | None, str]:
 
 
 def default_fetch(url: str) -> str:
-    import httpx  # lazy: importing memo must never load the network stack
-
     try:
         response = httpx.get(url, timeout=15.0, follow_redirects=True)
     except Exception as error:  # network down/timeout -> internal, no row (F-04)
