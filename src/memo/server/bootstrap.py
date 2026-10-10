@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from memo import skills, summary
+from memo.models.orm import Memory as OrmMemory
+from memo.models.orm import Skill as OrmSkill
 
 
 def stats_line(conn, memory_on=True, skills_on=True) -> str:
-    memory_count = conn.execute(
-        "SELECT COUNT(*) FROM memories WHERE status='current'").fetchone()[0]
-    skill_count = conn.execute(
-        "SELECT COUNT(*) FROM skills WHERE source != 'tombstone'").fetchone()[0]
+    memory_count = OrmMemory.select().where(OrmMemory.status == "current").count()
+    skill_count = OrmSkill.select().where(OrmSkill.source != "tombstone").count()
     memory_text = f"{memory_count}/250 memories" if memory_on else "memories DISABLED"
     skills_text = f"{skill_count} skills" if skills_on else "skills DISABLED"
     return f"Stats: {memory_text} · {skills_text} · db v3"

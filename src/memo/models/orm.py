@@ -107,6 +107,7 @@ class ArchivedMemory(BaseModel):
 
     class Meta:
         table_name = "archived_memories"
+        primary_key = False  # CTAS clone has no PK, matches DDL
 
 
 class Episode(BaseModel):
@@ -125,7 +126,7 @@ class Skill(BaseModel):
     name = TextField(primary_key=True)
     description = TextField()
     body = TextField()
-    hash = TextField(column_name="hash")
+    skill_hash = TextField(column_name="hash")
     version = IntegerField(default=1)
     source = TextField(default="local")
     created_at = TextField(default=utc_now)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 
 from memo import errors
+from memo.models.orm import Skill
 from memo.skills.crud import build_frontmatter, l0_line
 
 FILE_HARNESSES = ("opencode", "claude-code", "filesystem")
@@ -23,10 +24,9 @@ ORIENTATION = (
 
 
 def live_rows(conn: sqlite3.Connection) -> list[tuple]:
-    return conn.execute(
-        "SELECT name, description, body, hash, version FROM skills "
-        "WHERE source != 'tombstone' ORDER BY name ASC"
-    ).fetchall()
+    return [(skill.name, skill.description, skill.body, skill.skill_hash, skill.version)
+            for skill in Skill.select().where(Skill.source != "tombstone")
+            .order_by(Skill.name.asc())]
 
 
 def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
@@ -34,8 +34,7 @@ def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
     live = live_rows(conn)
     by_name = {name: (description, body, body_hash, version) for name, description, body, body_hash, version in live}
     tombstoned = {
-        record[0] for record in conn.execute(
-            "SELECT name FROM skills WHERE source='tombstone'").fetchall()
+        skill.name for skill in Skill.select(Skill.name).where(Skill.source == "tombstone")
     }
     all_names = set(by_name) | tombstoned
     if known is None:

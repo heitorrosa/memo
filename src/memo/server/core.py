@@ -35,6 +35,9 @@ def server_connect(path: str) -> sqlite3.Connection:
             sqlite_vec.load(conn)
         except Exception:
             pass
+    db.peewee_init(path)
+    if not db.probe_single_writer(conn):
+        print("memo: write lock busy at startup, continuing", file=sys.stderr)
     db.migrate(conn)
     return conn
 
