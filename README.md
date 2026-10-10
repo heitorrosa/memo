@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/memo-raw.png" width="200" alt="memo logo"></p>
 
-<center>One durable memory plus reusable skill MCP server for all of your agents.</center>
+<p align="center">One durable memory plus reusable skill MCP server for all of your agents.</p>
 
 
 memo gives every harness the same two things: facts the agent remembers and workflows the agent reuses. One Python server over one SQLite file. File harnesses sync skill files. Web harnesses hold the skill index bundle in context.
