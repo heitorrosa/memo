@@ -1,6 +1,11 @@
 // opencode-memo hooks (Bun, zero deps — fetch + node:crypto are platform).
-// transform: pure string op, no MCP call. onSessionStart / onAfterWrite:
-// remote-MCP calls; failures warn + stale, session NEVER fails (M-026).
+// Enforcement-only glue. `transform` is a pure string op (no MCP call);
+// `onSessionStart` does the session-open sync + file materialization over the
+// remote MCP endpoint. The execute.before guard + context/compaction hook bodies
+// live in plugin.js.
+// No background scheduling, no idle flush, no post-tool auto-capture/auto-save
+// (M-030). Failures warn + go stale; the session NEVER fails because memory is
+// down (M-026).
 import { createHash, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -13,6 +18,28 @@ const defaultSkillsDir = () =>
   path.join(process.env.HOME ?? "~", ".config/opencode/skills");
 
 const HERMES_BLOCK = new URL("./templates/hermes-block.md", import.meta.url);
+
+// Last-resort orientation, used only if templates/hermes-block.md is unreadable,
+// so the every-render reminder can never silently vanish.
+const FALLBACK_BLOCK = [
+  "# memo (opencode) — prose: prompts.json (memo://summary)",
+  'skill_sync(harness:"opencode", known:<local name/hash list>)',
+  "after a workflow worth repeating (5+ tool calls / non-obvious fix): " +
+    "skill_put + write skills/<name>/SKILL.md",
+].join("\n");
+
+/** Compaction addendum — persisted on both ends of a compaction. */
+export const REMIND_PERSIST =
+  "Persist critical facts with memory_save and reusable workflows with " +
+  "skill_put before they are lost.";
+
+// Guard reminders (queued by guardBefore, surfaced on the next context render).
+const REMIND_SEARCH =
+  "memo: no memory_search yet this session — search persistent memory before " +
+  "acting (memory_search), and memory_save corrections or preferences as they land.";
+const REMIND_SKILL =
+  "memo: writing a SKILL.md with no skill_put this session — index it with " +
+  "skill_put(name, description, body) so future sessions sync it back.";
 
 async function rpc(method, params) {
   const r = await fetch(endpoint(), {
@@ -51,7 +78,8 @@ async function localKnown(skillsDir) {
   return known;
 }
 
-/** Pure string op: append the hermes block + frozen snapshots. No MCP call. */
+/** Pure string op: append the hermes block + frozen snapshots. No MCP call.
+ *  The block falls back to FALLBACK_BLOCK so orientation is never empty. */
 export async function transform(systemText, { memoryMd = "", userMd = "" } = {}) {
   let block = "";
   try {
@@ -59,7 +87,7 @@ export async function transform(systemText, { memoryMd = "", userMd = "" } = {})
   } catch {
     block = "";
   }
-  return [systemText.trim(), block.trim(),
+  return [systemText.trim(), block.trim() || FALLBACK_BLOCK,
     memoryMd.trim(), userMd.trim()].filter(Boolean).join("\n\n");
 }
 
@@ -92,43 +120,48 @@ export async function onSessionStart({ skillsDir, memoryPath, userPath } = {}) {
   }
 }
 
-const _timers = new Map();
+// ─── execute.before guard: reminders, never blocks ────────────────────────────
+// Memo's MCP tools arrive as `<server>_<tool>` (or `<server>.<tool>`); match on
+// the suffix so the guard survives a server rename.
+const MEMORY_TOOLS = [
+  "memory_search", "memory_save", "memory_delete",
+  "skill_put", "skill_get", "skill_sync", "skill_install", "skill_update",
+];
 
-/** Map either a file-write path (string) or a native skill tool event
- *  ({tool:"skill_create"|"skill_update", input:{name}}) to a SKILL.md path. */
-function resolveSkillPath(event, skillsDir) {
-  if (typeof event === "string") {
-    return event.includes(`${path.sep}skills${path.sep}`) && event.endsWith("SKILL.md")
-      ? event : null;
-  }
-  const tool = event?.tool;
-  if ((tool === "skill_create" || tool === "skill_update") && event?.input?.name) {
-    return path.join(skillsDir ?? defaultSkillsDir(), `${event.input.name}`, "SKILL.md");
-  }
-  return null;
+function memoTool(name) {
+  return MEMORY_TOOLS.find(
+    (t) => name === t || name.endsWith(`_${t}`) || name.endsWith(`.${t}`)) ?? null;
 }
 
-/** After hook: skills/**\/SKILL.md writes AND native skill_create/skill_update
- *  tool events -> skill_put(source='local-hook'). Debounced 2s per resolved
- *  path; logs, never throws. */
-export function onAfterWrite(event, { skillsDir } = {}) {
-  const filePath = resolveSkillPath(event, skillsDir);
-  if (!filePath) return;
-  clearTimeout(_timers.get(filePath));
-  _timers.set(filePath, setTimeout(async () => {
-    try {
-      const text = await fs.readFile(filePath, "utf8");
-      const meta = Object.fromEntries(
-        (text.split("---")[1] ?? "").split("\n").filter((l) => l.includes(":"))
-          .map((l) => { const i = l.indexOf(":"); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
-      const body = text.split(/^---$/m).slice(2).join("---").trimStart();
-      if (!meta.name || !meta.description) return;
-      await rpc("tools/call", { name: "skill_put",
-        arguments: { name: meta.name, description: meta.description, body, source: "local-hook" } });
-    } catch (e) {
-      console.warn(`memo after-write: ${e.message}`);
+/** Per-session guard state — plain data, owned by plugin.js. */
+export function createGuard() {
+  return { searched: false, put: false, nudged: new Set(), pending: [] };
+}
+
+/** Records memory usage and queues at most one reminder per trigger per session.
+ *  Never throws, never blocks, never mutates the tool input (M-026 preserved):
+ *  the tool runs unchanged and the reminder surfaces on the next context render. */
+export function guardBefore(event, g) {
+  const tool = String(event?.tool ?? "");
+  const hit = memoTool(tool);
+  if (hit) {
+    if (hit === "memory_search" || hit === "memory_save") g.searched = true;
+    if (hit === "skill_put") g.put = true;
+    return;
+  }
+  const input = event?.input ?? {};
+  const p = String(input.path ?? input.filePath ?? "").replace(/\\/g, "/");
+  if (/\/SKILL\.md$/i.test(p)) {
+    if (!g.put && !g.nudged.has("skill")) {
+      g.nudged.add("skill");
+      g.pending.push(REMIND_SKILL);
     }
-  }, 2000));
+    return;
+  }
+  if (!g.searched && !g.nudged.has("search")) {
+    g.nudged.add("search");
+    g.pending.push(REMIND_SEARCH);
+  }
 }
 
 // Constant-time local compare helper (re-exported for tests/consumers).

@@ -2,57 +2,95 @@
 // Talks to memo ONLY over its MCP endpoint — never opens the DB file (M-032).
 // Config (env, with defaults): MEMO_ENDPOINT (default
 // http://localhost:8000/mcp), MEMO_TOKEN (required for --http).
+//
+// Enforcement-only. Three registrations — no background scheduling, no idle
+// flush, no post-tool auto-capture/auto-save (M-030):
+//   1. session "context"      — frozen orientation block, byte-stable per
+//                               session, re-pushed on EVERY render so it
+//                               survives compaction; plus any reminder queued by (2)
+//   2. tool "execute.before"  — reminder guards: records memory_search/skill_put
+//                               use; queues a reminder when the agent acts
+//                               without them (never blocks, never mutates input)
+//   3. session "compaction"   — carries the memory block through compaction
 import { Plugin } from "@opencode/plugin";
-import { transform, onSessionStart, onAfterWrite } from "./hooks.js";
+import {
+  transform, onSessionStart, createGuard, guardBefore, REMIND_PERSIST,
+} from "./hooks.js";
 
 export const name = "opencode-memo";
 export const version = "3.0.0";
 
-// Named re-exports stay for tests/consumers that import drives directly.
-export { transform, onSessionStart, onAfterWrite };
+// Named re-exports stay for tests/consumers that import hooks directly.
+export { transform, onSessionStart, guardBefore };
 
 export const config = {
   endpoint: process.env.MEMO_ENDPOINT ?? "http://localhost:8000/mcp",
   tokenEnv: "MEMO_TOKEN",
 };
 
-const SNAPSHOT_CACHE_MAX = 64;
+const CACHE_MAX = 64;
 
-// V2 entrypoint: the bare named exports above are inert — opencode loads the
-// default `Plugin.define` and calls setup(ctx). Three registrations:
-//   1. context inject  — hermes block + session snapshot (transform, frozen)
-//   2. session-start sync — onSessionStart over remote MCP (frozen per session)
-//   3. after-write push — file writes under skills/** + native skill_create/update
 export default Plugin.define({
   id: "opencode-memo",
   async setup(ctx) {
-    // Frozen per-session snapshot. onSessionStart runs once per session (sync +
-    // skill delta apply); every later context render replays the same bytes so
-    // the prompt cache stays stable. Map keyed by sessionID.
+    // sid -> { promise, text }: one onSessionStart per session; `text` pins the
+    // resolved bytes so concurrent renders (and the prompt cache) see identical
+    // text — the frozen snapshot the enforcement contract depends on.
     const snapshots = new Map();
+    // sid -> guard state (see guardBefore).
+    const guards = new Map();
 
+    function snapshot(sid) {
+      let e = snapshots.get(sid);
+      if (e) return e;
+      e = { promise: null, text: null };
+      e.promise = onSessionStart({})
+        .then((r) => transform("", { memoryMd: r?.summary ?? "" }));
+      snapshots.set(sid, e);
+      if (snapshots.size > CACHE_MAX) snapshots.delete(snapshots.keys().next().value);
+      return e;
+    }
+
+    function guard(sid) {
+      let g = guards.get(sid);
+      if (g) return g;
+      g = createGuard();
+      guards.set(sid, g);
+      if (guards.size > CACHE_MAX) guards.delete(guards.keys().next().value);
+      return g;
+    }
+
+    // 1. Every render: frozen orientation, then any reminders queued since the
+    // last render (one-shot — cleared once surfaced).
     await ctx.session.hook("context", async (event) => {
       const sid = String(event.sessionID ?? "default");
-      let pending = snapshots.get(sid);
-      if (!pending) {
-        pending = onSessionStart({})
-          .then((r) => transform("", { memoryMd: r?.summary ?? "" }));
-        snapshots.set(sid, pending);
-        if (snapshots.size > SNAPSHOT_CACHE_MAX) {
-          snapshots.delete(snapshots.keys().next().value);
-        }
+      const e = snapshot(sid);
+      if (e.text === null) e.text = await e.promise;
+      event.system.push({ type: "text", text: e.text });
+      const g = guard(sid);
+      if (g.pending.length > 0) {
+        event.system.push({ type: "text", text: g.pending.join("\n") });
+        g.pending.length = 0;
       }
-      event.system.push({ type: "text", text: await pending });
     });
 
-    await ctx.tool.hook("execute.after", (event) => {
-      if (event.status !== "completed") return;
-      const input = event.input ?? {};
-      if (event.tool === "skill_create" || event.tool === "skill_update") {
-        onAfterWrite({ tool: event.tool, input });
-      } else if (event.tool === "write" || event.tool === "edit" || event.tool === "patch") {
-        const p = input.path ?? input.filePath;
-        if (p) onAfterWrite(String(p));
+    // 2. Reminder guards — record memory use, queue at most one reminder each.
+    await ctx.tool.hook("execute.before", (event) => {
+      guardBefore(event, guard(String(event.sessionID ?? "default")));
+    });
+
+    // 3. Compaction: carry the memory block forward (mirrors the hermes plugin).
+    await ctx.session.hook("compaction", async (event) => {
+      const sid = String(event.sessionID ?? "default");
+      const e = snapshots.get(sid);
+      if (!e) return;
+      try {
+        if (e.text === null) e.text = await e.promise;
+        event.result = {
+          summary: `## Session State Summary\n${e.text}\n\n${REMIND_PERSIST}`,
+        };
+      } catch {
+        // leave event.result unset -> normal model compaction proceeds
       }
     });
   },
