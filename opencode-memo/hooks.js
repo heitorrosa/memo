@@ -47,6 +47,7 @@ export const REMIND_DRIFT = (name) =>
 // carries the session id it returns. Lazily opened once, re-opened on expiry.
 let _sid = null;
 let _ready = false;
+let _tail = Promise.resolve();  // rpc calls are serialized (see rpc)
 
 async function rpcPost(method, params, sid) {
   const headers = {
@@ -73,7 +74,7 @@ async function openSession() {
   _ready = true;
 }
 
-async function rpc(method, params) {
+async function rpcCall(method, params) {
   if (!_ready) await openSession();
   let out = await rpcPost(method, params, _sid);
   if (out.status === 400 || out.status === 404) {  // missing/expired session
@@ -83,6 +84,15 @@ async function rpc(method, params) {
   if (out.status === 401) throw new Error("memo: unauthorized (check MEMO_TOKEN)");
   if (out.status !== 200) throw new Error(`memo: HTTP ${out.status}`);
   return parseRpc(out.text);
+}
+
+/** Serialized MCP call. The memo streamable-HTTP server mishandles concurrent
+ *  requests on one session (empty/crossed responses, occasional hang), so every
+ *  call queues behind the previous one — never two in flight at once. */
+function rpc(method, params) {
+  const run = _tail.then(() => rpcCall(method, params), () => rpcCall(method, params));
+  _tail = run.catch(() => {});
+  return run;
 }
 
 /** Pull the JSON-RPC payload from either a raw JSON body or an SSE frame
@@ -96,13 +106,14 @@ function parseRpc(text) {
 
 const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
-// Canonical skill-body hash recipe, shared with the server comparison
-// (memo/skills/crud.hash_body_normalized): sha256-hex over the UTF-8 body with
-// the frontmatter block removed and surrounding whitespace trimmed, so a
-// hand-edited trailing newline is hash-invisible (no churn).
+/** Canonical body hash: sha256 over the UTF-8 body with surrounding whitespace
+ *  trimmed (memo/skills/crud.hash_body_normalized is `body.strip()`), so a
+ *  hand-edited trailing newline is hash-invisible (no churn). */
+const normHash = (body) => sha256(String(body).trimStart().replace(/\s+$/, ""));
+
+/** The canonical recipe applied to a whole SKILL.md (frontmatter removed). */
 export function skillBodyHash(text) {
-  const body = String(text).split(/^---$/m).slice(2).join("---");
-  return sha256(body.trimStart().replace(/\s+$/, ""));
+  return normHash(String(text).split(/^---$/m).slice(2).join("---"));
 }
 
 function frontmatterVersion(text) {
@@ -378,7 +389,11 @@ async function checkDrift(name, skillsDir, g) {
     }
     const res = await rpc("tools/call", { name: "skill_get", arguments: { name } });
     const server = JSON.parse(res.result.content[0].text);
-    if (server && server.hash && server.hash !== localHash
+    // skill_get.hash is the RAW stored hash (crud.get), so compare through the
+    // normalized recipe via the returned body — otherwise a whitespace-only
+    // difference reads as drift on every use.
+    const serverHash = typeof server?.body === "string" ? normHash(server.body) : server?.hash;
+    if (serverHash && serverHash !== localHash
         && !g.nudged.has(`drift:${name}`)) {
       g.nudged.add(`drift:${name}`);
       g.pending.push(REMIND_DRIFT(name));
