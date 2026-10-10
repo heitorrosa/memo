@@ -22,6 +22,14 @@ The server listens on port `8000`, stores its database in `./data/memo.db`, and 
 
 For local development, install with `pip install .` and run the CLI with an explicit database path. The optional stdio transport is intended for offline or CI use. Never run multiple server processes against the same database.
 
+The embedding model (`sentence-transformers/all-MiniLM-L6-v2`) is vendored into the gitignored `./models` directory and bind-mounted read-only at `/models`, so builds and container recreates never re-download it. On a fresh clone, populate it once (after `pip install .`):
+
+```sh
+python scripts/fetch_model.py
+```
+
+Compose points fastembed at the mount (`FASTEMBED_CACHE_PATH=/models`) and sets `HF_HUB_OFFLINE=1`, so the server reads the weights from `./models` and fails loudly rather than silently downloading if the mount is empty.
+
 ## Connect a harness
 
 Add Memo as a remote MCP server in `opencode.json`:
