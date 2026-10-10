@@ -69,7 +69,7 @@ def test_contradict_supersedes(tmp_path):
     upd = _row(conn, "editor.indent")
     assert upd[2] == "superseded" and upd[4] == "editor.indent.v2"
     assert upd[5] == new[10]  # valid_to(A) = valid_from(B), no gaps
-    assert upd[6] in ("supersedes", "corrects")
+    assert new[6] in ("supersedes", "corrects")  # relation lives on the winner
     conn.close()
 
 
