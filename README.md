@@ -109,30 +109,47 @@ flowchart TB
 - **OpenCode plugin:** injects memory, syncs skills at session start, and pushes local skill edits after writes.
 - **Maintenance:** evicts low-value memories when over capacity, archives stale context, rolls older context into episode summaries, and expires old tombstones.
 
-## Memory math
+## In Depth
 
-Memo combines vector similarity, full-text relevance, and retention decay:
+### Memory ranking
 
-\[
+Memo ranks memories by combining semantic similarity, full-text relevance, and retention:
+
+$$
 S = 0.60V + 0.25T + 0.15R
-\]
+$$
 
-\[
+where
+
+$$
 V = \frac{\cos(\mathbf{a},\mathbf{b}) + 1}{2},
-\qquad R = e^{-d/s}
-\]
+\qquad
+R = e^{-d/s}
+$$
 
-Here, \(V\) is normalized cosine similarity, \(T\) is normalized full-text relevance (or zero when there is no hit), \(d\) is age in days, and \(s\) is the memory's stability. Results are ordered by score, use count, update time, then key.
+- $V$: normalized cosine similarity between the query and memory embeddings.
+- $T$: normalized full-text relevance, or zero when there is no match.
+- $R$: retention score based on age and stability.
+- $d$: age in days.
+- $s$: memory stability.
 
-When a memory is used, its stability can increase, slowing future retention decay. The update is bounded by the memory type's stability cap. Saving a fact can update an existing row or create a related row; contradictions can supersede prior facts while preserving history.
+Results are ordered by score, use count, update time, then key.
 
-Temporal validity uses `valid_from` and `valid_to`. A memory is effective at time \(T\) when its status is current, it has started, and it has not expired:
+### Stability and updates
 
-\[
+Using a memory can increase its stability, slowing future retention decay. Growth is bounded by the stability cap for the memory type.
+
+When a fact is saved, Memo may update an existing row or create a related one. Contradictory facts can supersede older facts while preserving their history.
+
+### Temporal validity
+
+Memo uses `valid_from` and `valid_to` to represent when a memory applies. A memory is effective at time $T$ when its status is current, it has started, and it has not expired:
+
+$$
 \text{valid\_from} \le T
 \quad\land\quad
 (\text{valid\_to} = \varnothing \;\lor\; \text{valid\_to} > T)
-\]
+$$
 
 ## Configuration
 
@@ -148,6 +165,13 @@ Optional:
 - `MEMO_LOG`: log level, `debug`, `info`, or `warn`.
 
 Boolean flags also accept `true` or `yes`, case-insensitively. Both domains cannot be disabled at once. The CLI supports HTTP mode, port selection, health checks, database backups, and tool-list output for transport parity checks. Backups can be made while the server is running using the CLI backup command.
+
+## TODO
+
+- [ ] Graph links for the memories and skills
+- [ ] Skill Janitor
+- [ ] Retrieval gate to force the memory to be read using a System1 Decision model
+- [ ] Manaagement dashboard
 
 ## License
 
