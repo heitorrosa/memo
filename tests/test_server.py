@@ -41,7 +41,7 @@ def _insert(conn, key, *, typ="context", ns="default", age_days=10.0,
         conn.execute(
             "INSERT INTO memories(key,namespace,value,type,embedding,stability,"
             "score,uses,created_at,updated_at,valid_from,status,family_id)"
-            " VALUES(?,?,?,?,?,?,?, ?,?,?,?,?,?,?)".replace(" ?,", ","),
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (key, ns, value or f"durable project fact {key} for the deploy pipeline",
              typ, emb, {"preference": 14.0, "feedback": 10.0,
                         "analysis": 7.0, "context": 3.0}[typ],
@@ -79,7 +79,7 @@ def _fill_250(conn):
     for i in range(249):
         _insert(conn, f"fillrow{i:03d}", age_days=2.0 + (i % 25),
                 uses=1 + (i % 6))
-    _insert(conn, "old.deploy.cmd", typ="preference", age_days=60.0,
+    _insert(conn, "old.deploy.cmd", typ="preference", age_days=120.0,
             uses=1, score=1.0,
             value="durable project fact: the legacy deploy command lives in ops docs")
     assert _count(conn) == 250
