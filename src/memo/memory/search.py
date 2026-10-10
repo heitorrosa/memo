@@ -13,6 +13,7 @@ import sqlite3
 
 from memo import db as memo_db
 from memo import embeddings, errors, rank, temporal
+from memo import prompts as prompt_store
 from memo.memory.common import BETA, R_FLOOR, STABILITY, S_CAP_X, fts_scores
 from memo.models import orm as orm_models
 from memo.models.orm import Memory as OrmMemory
@@ -24,17 +25,19 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
            include_superseded: bool = False) -> list[dict]:
     """Returns [{key,value,type,score,age_days,uses}]."""
     if not query or not query.strip():
-        return errors.err("empty_query", "query is empty")
+        return errors.err("empty_query", prompt_store.render("err_empty_query"))
     try:
         anchor_time = temporal.parse_ts(temporal.now_iso() if valid_at == "now" else valid_at)
     except ValueError:
-        return errors.err("internal", f"bad valid_at {valid_at!r}")
+        return errors.err("internal", prompt_store.render(
+            "err_valid_at", valid_at=valid_at))
     known = None
     if as_known_at is not None:
         try:
             known = temporal.parse_ts(as_known_at)
         except ValueError:
-            return errors.err("internal", f"bad as_known_at {as_known_at!r}")
+            return errors.err("internal", prompt_store.render(
+                "err_as_known_at", as_known_at=as_known_at))
     limit = min(max(1, limit), 50)  # silent clamp, no error
 
     query_embedding = embeddings.embed([query])[0]

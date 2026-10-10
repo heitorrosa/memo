@@ -8,11 +8,6 @@ from memo import errors
 
 VERSION = 3
 
-MEMORY_TOOLS = ("memory_search", "memory_save", "memory_delete")
-SKILL_TOOLS = ("skill_get", "skill_put", "skill_update", "skill_install",
-               "skill_sync")
-ALL_TOOLS = ("memory_delete", "memory_save", "memory_search") + SKILL_TOOLS
-
 
 def env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in ("1", "true", "yes")

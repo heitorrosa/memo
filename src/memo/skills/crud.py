@@ -12,6 +12,7 @@ import sqlite3
 
 from memo import db as memo_db
 from memo import errors
+from memo import prompts as prompt_store
 from memo.models import orm as orm_models
 from memo.models.orm import Skill
 
@@ -32,7 +33,8 @@ def shorten_text(description: str, words: int = 20) -> str:
 
 
 def l0_line(name: str, description: str) -> str:
-    return f"- **{name}** — {shorten_text(description)}"
+    return prompt_store.render("l0_line_format", name=name,
+                               description=shorten_text(description))
 
 
 def build_frontmatter(name: str, description: str, version: int, body: str) -> str:
@@ -112,14 +114,16 @@ def get(conn: sqlite3.Connection, name: str, version: int | None = None) -> dict
     with memo_db.orm_ctx(conn):
         row = Skill.get_or_none(Skill.name == name)
     if row is None or row.source == "tombstone":
-        return errors.err("not_found", f"skill {name!r} not found")
+        return errors.err("not_found", prompt_store.render(
+            "err_skill_not_found", name=name))
     description, body, body_hash, current_version = (
         row.description, row.body, row.skill_hash, row.version)
     if version is None or version == current_version:
         return {"name": name, "description": description, "body": body,
                 "hash": body_hash, "version": current_version}
     if version < 1 or version > current_version:
-        return errors.err("not_found", f"skill {name!r} has no version {version}")
+        return errors.err("not_found", prompt_store.render(
+            "err_skill_no_version", name=name, version=version))
     base, sections = split_revisions(body)
     # NOTE: pins are exact only within the current put generation; a later
     # full-rewrite put resets the base while the counter continues.
@@ -134,7 +138,8 @@ def update(conn: sqlite3.Connection, name: str, patch: str) -> dict:
     with peewee_db.bind_ctx(orm_models.MODELS):
         row = Skill.get_or_none(Skill.name == name)
     if row is None or row.source == "tombstone":
-        return errors.err("not_found", f"skill {name!r} not found")
+        return errors.err("not_found", prompt_store.render(
+            "err_skill_not_found", name=name))
     body, version = row.body, row.version
     now, new_version = utc_now(), version + 1
     new_body = f"{body}\n\n## Revision v{new_version} ({now})\n{patch}"
@@ -152,7 +157,8 @@ def tombstone(conn: sqlite3.Connection, name: str) -> dict:
     with peewee_db.bind_ctx(orm_models.MODELS):
         row = Skill.get_or_none(Skill.name == name)
     if row is None:
-        return errors.err("not_found", f"skill {name!r} not found")
+        return errors.err("not_found", prompt_store.render(
+            "err_skill_not_found", name=name))
     body_hash, version, source = row.skill_hash, row.version, row.source
     if source != "tombstone":
         with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():

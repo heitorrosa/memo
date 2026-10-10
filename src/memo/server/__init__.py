@@ -28,9 +28,6 @@ from memo.server.operations import (
     sync_call_locked,
 )
 from memo.server.shared import (
-    ALL_TOOLS,
-    MEMORY_TOOLS,
-    SKILL_TOOLS,
     VERSION,
     env_flag,
     internal_error,
@@ -40,10 +37,7 @@ from memo.server.shared import (
 )
 
 __all__ = [
-    "ALL_TOOLS",
     "DESCRIPTIONS",
-    "MEMORY_TOOLS",
-    "SKILL_TOOLS",
     "VERSION",
     "BearerAuth",
     "backup_database",

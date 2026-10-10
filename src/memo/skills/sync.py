@@ -6,6 +6,7 @@ import sqlite3
 from memo import errors
 from memo import db as memo_db
 from memo import maintenance
+from memo import prompts as prompt_store
 from memo.models.orm import Skill
 from memo.skills.crud import build_frontmatter, l0_line
 
@@ -16,13 +17,7 @@ WEB_TRUNCATE_SKILLS = 150
 WEB_TRUNCATE_CHARS = 32 * 1024
 WEB_PAGE = 60
 
-ORIENTATION = (
-    "You hold durable memory (facts) and a skill index (workflows) below. "
-    "Before any personal/project answer: memory_search. "
-    "After learning anything durable: memory_save. "
-    "When a skill matches the task: skill_get (never guess the body). "
-    "Truncated index? Re-call skill_sync with a filter."
-)
+ORIENTATION = prompt_store.render("orientation")
 
 
 def live_rows(conn: sqlite3.Connection) -> list[tuple]:
@@ -105,13 +100,14 @@ def sync_web(conn: sqlite3.Connection, filter_text: str | None,
     if not truncated and (offset or limit):
         page = rows[offset:offset + limit] if limit else rows[offset:]
     lines = [
-        f"{l0_line(skill[0], skill[1])} → `skill_get(\"{skill[0]}\")` for the body."
+        f"{l0_line(skill[0], skill[1])}"
+        f"{prompt_store.render('web_l0_suffix', name=skill[0])}"
         for skill in page
     ]
-    head = (f"## Skill index ({total} — full, keep in mind for the whole "
-            f"conversation)" if not truncated else
-            f"## Skill index ({total} — truncated, showing {len(page)} — "
-            f"refine with skill_sync filter)")
+    head = (prompt_store.render("skill_index_heading_full", count=total)
+            if not truncated else
+            prompt_store.render("web_index_truncated_heading",
+                                total=total, shown=len(page)))
     return {"mode": "bundle",
             "bootstrap_md": ORIENTATION + "\n" + head + "\n" + "\n".join(lines),
             "truncated": truncated, "total": total}
@@ -128,7 +124,8 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
     if harness == "web":
         return sync_web(conn, filter, offset, limit)
     if harness not in FILE_HARNESSES:
-        return errors.err("not_found", f"unknown harness {harness!r}")
+        return errors.err("not_found", prompt_store.render(
+            "err_unknown_harness", harness=harness))
     return sync_files(conn, known, offset, limit)
 
 

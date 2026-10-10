@@ -6,6 +6,7 @@ import sqlite3
 import httpx
 
 from memo import errors
+from memo import prompts as prompt_store
 from memo.skills.crud import build_frontmatter, get, put
 
 
@@ -56,20 +57,24 @@ def install(conn: sqlite3.Connection, repository: str, skill_name: str,
                f"{skill_name}/SKILL.md")
         source = f"github:{remainder}"
     else:
-        return errors.err("not_found", f"unknown repo {repository!r}")
+        return errors.err("not_found", prompt_store.render(
+            "err_unknown_repo", repository=repository))
     try:
         text = fetch(url)
     except Exception as error:  # noqa: BLE001 — boundary: map to envelope
         first = str(error).splitlines()[0] if str(error) else type(error).__name__
-        detail = first if first.startswith("fetch failed") else f"fetch failed: {first}"
+        detail = first if first.startswith("fetch failed") else prompt_store.render(
+            "err_fetch_failed", first=first)
         return errors.err("internal", detail)
     meta, body = split_frontmatter(text)
     if not meta or not meta.get("name") or not meta.get("description"):
-        return errors.err("not_found", f"frontmatter invalid for {skill_name!r}")
+        return errors.err("not_found", prompt_store.render(
+            "err_frontmatter_invalid", skill_name=skill_name))
     if meta["name"] != skill_name:
         return errors.err(
             "not_found",
-            f"frontmatter name mismatch: {meta['name']!r} != {skill_name!r}")
+            prompt_store.render("err_frontmatter_mismatch",
+                                actual=meta["name"], expected=skill_name))
     receipt = put(conn, skill_name, meta["description"], body, source=source)
     row = get(conn, skill_name)
     receipt["files_to_write"] = [{
