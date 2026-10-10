@@ -100,8 +100,20 @@ def is_effective(row: dict, at: datetime.datetime) -> bool:
     return vf <= at
 
 
+def started(row: dict, at: datetime.datetime) -> bool:
+    """History view (include_superseded): row had started by T.
+
+    The upper bound is dropped — history shows the whole chain behind the
+    topic (§11 table: include at now returns B + A flagged).
+    """
+    try:
+        return parse_ts(row["valid_from"]) <= at
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 def in_window(row: dict, at: datetime.datetime) -> bool:
-    """Validity window ignoring status (history reads with include flag)."""
+    """Validity window ignoring status (past-window reads with include flag)."""
     try:
         vf = parse_ts(row["valid_from"])
     except (ValueError, KeyError, TypeError):

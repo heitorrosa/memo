@@ -224,22 +224,30 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
     scored = []
     for rid, k, v, t, emb, stab, score, uses, ca, ua, vf, vt, st, fam in id_rows:
         row = {"status": st, "valid_from": vf, "valid_to": vt}
-        if include_superseded:
-            if not temporal.in_window(row, at):
-                continue
-        elif not temporal.is_effective(row, at):
+        try:
+            vto = temporal.parse_ts(vt) if vt is not None else None
+        except ValueError:
             continue
         if known is not None:
             try:
                 if temporal.parse_ts(ca) > known:
                     continue
-                # Chain position then: a row superseded before K was not
-                # current at K — only its predecessor was.
-                if st == "superseded" and vt is not None \
-                        and temporal.parse_ts(vt) <= known:
-                    continue
             except ValueError:
                 continue
+        # Belief axis: an explicit as_known_at evaluates the window as of K
+        # unless the caller also pinned a valid_at question (T-then wins).
+        Tq = at if (valid_at != "now" or known is None) else known
+        if include_superseded:
+            if not temporal.started(row, Tq):
+                continue
+        elif st == "current":
+            if not temporal.in_window(row, Tq):
+                continue
+        elif known is not None and vto is not None and vto > known \
+                and temporal.in_window(row, Tq):
+            pass  # current-at-K: memo believed it current then
+        else:
+            continue
         V = embeddings.cosine(qemb, emb)
         T = fts.get(rid, 0.0)  # no-hit T=0, no renormalization (M-002)
         age = max(0.0, (now - temporal.parse_ts(ca)).total_seconds() / 86400)
