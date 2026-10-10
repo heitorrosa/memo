@@ -4,7 +4,7 @@ version = "3.0.0"
 description = "Memo unified MCP server (v3): durable memory + reusable skills over memo.db"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=1.0",
+  "mcp>=1.0,<2",
   "fastembed>=0.3",
   "rapidfuzz>=3.0",
   "numpy>=1.26",
