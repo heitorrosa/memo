@@ -458,6 +458,107 @@ def test_query_token_never_logged(tmp_path, capsys):
     assert secret not in captured.err
 
 
+# --- MCP content negotiation: JSON-only clients (ChatGPT) vs SSE clients ---
+
+JSON_ONLY = {"Accept": "application/json", "Content-Type": "application/json"}
+BOTH = {"Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json"}
+SSE_ONLY = {"Accept": "text/event-stream", "Content-Type": "application/json"}
+
+
+def _init_body(pid=1):
+    return {"jsonrpc": "2.0", "id": pid, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "chatgpt", "version": "1"}}}
+
+
+def test_json_only_initialize_and_tools_list(tmp_path):
+    """ChatGPT's JSON-only client: initialize -> initialized -> tools/list,
+    all answered application/json (no 406, no SSE)."""
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18091)
+    try:
+        base = "http://127.0.0.1:18091/mcp"
+        h = {**JSON_ONLY, "Authorization": "Bearer t"}
+        r = httpx.post(base, json=_init_body(), headers=h, timeout=5.0)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"].startswith("application/json")
+        assert r.json()["result"]["serverInfo"]["name"] == "memo"
+        sid = r.headers["mcp-session-id"]
+
+        h2 = {**h, "mcp-session-id": sid, "mcp-protocol-version": "2025-06-18"}
+        n = httpx.post(base, json={"jsonrpc": "2.0",
+                                   "method": "notifications/initialized"},
+                       headers=h2, timeout=5.0)
+        assert n.status_code == 202, n.text
+        assert n.headers["content-type"].startswith("application/json")
+
+        tl = httpx.post(base, json={"jsonrpc": "2.0", "id": 2,
+                                    "method": "tools/list", "params": {}},
+                        headers=h2, timeout=5.0)
+        assert tl.status_code == 200, tl.text
+        assert tl.headers["content-type"].startswith("application/json")
+        names = sorted(t["name"] for t in tl.json()["result"]["tools"])
+        assert "memory_save" in names and "skill_sync" in names
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_both_accept_still_event_stream(tmp_path):
+    """SSE-capable clients (Accept: both) keep getting text/event-stream."""
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18092)
+    try:
+        r = httpx.post("http://127.0.0.1:18092/mcp", json=_init_body(),
+                       headers={**BOTH, "Authorization": "Bearer t"},
+                       timeout=5.0)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"].startswith("text/event-stream")
+        assert '"result"' in r.text  # the JSON-RPC message rides the event
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_sse_only_unchanged_406(tmp_path):
+    """An SSE-only Accept was and stays rejected (unchanged)."""
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18093)
+    try:
+        r = httpx.post("http://127.0.0.1:18093/mcp", json=_init_body(),
+                       headers={**SSE_ONLY, "Authorization": "Bearer t"},
+                       timeout=5.0)
+        assert r.status_code == 406
+        assert "must accept both" in r.text
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_negotiation_auth_still_enforced(tmp_path):
+    """JSON-only doesn't bypass auth: header and access_token query both work."""
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18094)
+    try:
+        base = "http://127.0.0.1:18094/mcp"
+        # no credentials -> 401 even with JSON-only Accept
+        assert httpx.post(base, json=_init_body(), headers=JSON_ONLY,
+                          timeout=5.0).status_code == 401
+        # header token -> accepted
+        ok = httpx.post(base, json=_init_body(),
+                        headers={**JSON_ONLY, "Authorization": "Bearer t"},
+                        timeout=5.0)
+        assert ok.status_code == 200, ok.text
+        # access_token query fallback -> accepted (fresh session)
+        q = httpx.post(base + "?access_token=t", json=_init_body(),
+                       headers=JSON_ONLY, timeout=5.0)
+        assert q.status_code == 200, q.text
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
 def test_http_tool_parity(tmp_path, capsys):
     import asyncio
     from memo.server.cli import main
