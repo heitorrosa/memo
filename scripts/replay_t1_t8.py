@@ -6,6 +6,7 @@ import datetime
 import os
 import sys
 import tempfile
+import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 os.environ["MEMO_EMBEDDINGS_FALLBACK"] = "1"
@@ -77,13 +78,17 @@ assert "runbook" in skills.get(conn, "web.runbook")["body"]
 assert "web.runbook" in skills.sync(conn, "web")["bootstrap_md"]
 print("T-3 SKILL-E2E ok: v1 + no-op re-put + get body + web bundle reflects")
 
-# T-4 burst: fill to 250 via API-distinct facts, then 10 rapid saves
+# T-4 burst: fill to 250 via API-distinct facts, then 10 rapid saves.
+# NOTE: fill/fresh keys carry a uuid4hex suffix so fuzz.ratio stays <80 and
+# each save inserts (sequential burstfillNNN keys fuzzy-merged into
+# extends->updated, stalling count and hanging the loop forever).
 n0 = conn.execute("SELECT COUNT(*) FROM memories WHERE status='current'").fetchone()[0]
 i = 0
 while conn.execute("SELECT COUNT(*) FROM memories WHERE status='current'").fetchone()[0] < 250:
-    memory.save(conn, f"burstfill{i:03d}", f"durable archived note {i} zebra xray {i*7}写的历史记录")
+    memory.save(conn, f"burst.{uuid.uuid4().hex[:8]}", f"durable archived note {i} zebra xray {i*7}写的历史记录")
     i += 1
-fresh = [f"burstnew{k}" for k in range(10)]
+    assert i < 2000, f"T-4 fill stalled: {i} saves without reaching 250 current"
+fresh = [f"burst.{uuid.uuid4().hex[:8]}" for _ in range(10)]
 for k in fresh:
     memory.save(conn, k, f"durable fresh burst fact {k} quasar {k} brand new work")
 for k in fresh:
@@ -131,7 +136,11 @@ memory.save(conn, "move.date", "durable plan: moving to Sao Paulo next year", va
 row = conn.execute("SELECT valid_from FROM memories WHERE key='move.date'").fetchone()
 assert row[0].startswith("2027-01-01"), row
 assert all(h["key"] != "move.date" for h in memory.search(conn, "where live")), "now must exclude"
-fut = memory.search(conn, "where live", valid_at="2027-06-01")
+# NOTE: token-overlapping query (mirrors tests/test_memory_search.py:70).
+# "where live" shares no FTS tokens with the row, so under deterministic
+# fallback vectors the row drowns in 250 burst rows on pure V noise;
+# the temporal assertion is what T-8 owns, FTS narrowing is the query's job.
+fut = memory.search(conn, "moving Sao Paulo", valid_at="2027-06-01")
 assert any(h["key"] == "move.date" for h in fut), [h["key"] for h in fut]
 print("T-8 FUTURE-VALIDITY ok: stored 2027-01-01 unclamped, now excludes, 2027-06-01 returns")
 
