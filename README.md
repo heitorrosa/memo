@@ -2,7 +2,8 @@
 
 <p align="center"><img src="assets/memo-raw.png" width="200" alt="memo logo"></p>
 
-One durable memory plus reusable skill MCP server for all of your agents.
+<center>One durable memory plus reusable skill MCP server for all of your agents.</center>
+
 
 memo gives every harness the same two things: facts the agent remembers and workflows the agent reuses. One Python server over one SQLite file. File harnesses sync skill files. Web harnesses hold the skill index bundle in context.
 
@@ -83,30 +84,68 @@ Skills:
 
 Also: the `bootstrap` prompt and the `memo://summary` resource return the same text (orientation plus top memories plus skill index plus stats line). Forbidden surfaces that must not exist: skills list tool, skills index resource, bare skill tool, manual touch tool, hard delete path, background daemon or timer thread.
 
-## Repo layout
+## System design
 
-```text
-src/memo/            server, models, memory, skills, maintenance, rank, embeddings
-src/memo/server/     stdio and HTTP entry points, tool registration, auth middleware
-src/memo/models/     Peewee ORM models over memo.db
-src/memo/memory/     save, search, classify, durability gate, temporal predicates
-src/memo/skills/     put, get, update, install, sync (file and bundle modes)
-opencode-memo/       Bun plugin: manifest, hooks, templates, plugin README
-docs/superpowers/spec/  unified MCP spec plan v3 (normative contracts)
-tests/               pytest suite (db, save, search, rank, skills, sync, server, e2e, drift)
-scripts/             replay_t1_t8.py contract replay, migrate_v2.py two DB import
-Dockerfile           single image, model baked at build time, volume /data, port 8000
-docker-compose.yml   one service, restart unless stopped, ./data:/data, env file, healthcheck
+Single `memo` container is the sole writer of `memo.db` (WAL mode, busy timeout 5000). Every harness connects as a remote MCP client over Streamable HTTP at `/mcp`. Eight tools: `memory_search`, `memory_save`, `memory_delete`, `skill_sync`, `skill_get`, `skill_put`, `skill_update`, `skill_install`. One `bootstrap` prompt and one `memo://summary` resource return the same orientation text (top memories plus skill index plus stats line).
+
+### Request lifecycle
+
+HTTP bearer gate: `/health` is open, every `/mcp` call requires the `MEMO_TOKEN` bearer header. Each tool runs under a shared lock through `server/operations.py`, which maps any exception to the `{error, detail}` envelope and never raises. Envelope codes: `empty_query`, `not_found`, `trivia_rejected`, `cap_evicted`, `hash_mismatch`, `truncated`, `internal`. Success shapes are per tool receipts (saved key plus action, ranked rows, deltas, hash plus version).
+
+### Persistence
+
+Peewee Models are the schema (creation via `create_tables`, changes via `playhouse.migrate`, no DDL strings as source of truth). Tables: `Memory` (composite key `key` plus `namespace`, CHECKs on type, status, relation), `MemoryFTS` (`FTS5Model` over content `memories`), `ArchivedMemory` (clone of `memories` plus archive columns), `Episode` (rollup summaries), `Skill` (tombstone is row state `source` equal to `tombstone`, not a table), `MemoMeta` (schema version seed). Raw SQL survives only for the `memories_ai`, `memories_ad`, `memories_au` FTS sync triggers plus the archived clone tail, applied by `db.migrate` after `create_tables`. Embeddings are 384 float32 BLOBs (`embeddings.py`, offline model fetch failure maps to `internal`). Search fuses vector cosine, FTS text, and retention decay as `0.6V plus 0.25T plus 0.15R` (`rank.py`), ordered by score, uses, recency, key. Temporal validity: `status` equal to `current` plus `valid_from`/`valid_to` window (`temporal.is_effective`), superseded rows stay readable as history (`chain_walk`). Single writer enforced by `BEGIN IMMEDIATE` probe (`db.probe_single_writer`, CLI lock refusal) plus WAL.
+
+### Janitor pass
+
+`maintenance.run` executes one bounded pass (`max_moves` default 5) at the end of `memory.save` and `skill.sync`: (1) over cap eviction per namespace, lowest score first, victim archived; (2) stale sweep for `analysis` and `context` rows older than threshold with low score and zero uses (`preference` and `feedback` exempt); (3) context rollup older than 30 days into one `Episode` row, sources archived; (4) tombstone expiry older than 30 days, row dropped. Idempotent, silent unless it moved rows.
+
+### Diagrams
+
+```mermaid
+flowchart LR
+  A[Harness client] ==> B[HTTP bearer gate]
+  B ==> C[Tool dispatch with lock]
+  C ==> D[Memory domain]
+  C ==> E[Skills domain]
+  D ==> F[SQLite single writer]
+  E ==> F
+  C ==> G[Janitor pass]
+  G ==> F
 ```
 
-## Testing
+```mermaid
+sequenceDiagram
+  participant H as Harness
+  participant S as Server
+  participant D as Store
+  H ->> S: memory_save key value
+  S ->> D: embed value to 384 BLOB
+  D ->> S: vector bytes
+  S ->> D: insert Memory row
+  D ->> S: row stored
+  S ->> D: FTS trigger indexes row
+  S ->> D: janitor bounded pass
+  S ->> H: receipt action plus key
+```
+
+```mermaid
+flowchart TB
+  M[Memory key plus namespace] ==> FTS[MemoryFTS key value]
+  M ==> AM[ArchivedMemory clone plus reason]
+  M ==> EP[Episode rollup summary]
+  SK[Skill name] ==> SK2[Skill row state live or tombstone]
+  MM[MemoMeta version seed] ==> M
+```
+
+### Testing
 
 ```text
 pytest
 python scripts/replay_t1_t8.py
 ```
 
-`pytest` runs the full suite in `tests/` (DB path `src` is already configured in `pyproject.toml`). The replay script replays the eight spec task contracts end to end against a scratch DB. Skill install tests mock the fetch, no live network in CI. Vector tests cover both backends: native vector cosine when present, numpy brute force over the FTS5 prefilter otherwise.
+`pytest` runs the full suite in `tests/` (DB path `src` is already configured in `pyproject.toml`). The replay script replays the eight spec task contracts end to end against a scratch DB. Skill install tests mock the fetch, no live network in CI. Vector tests cover both backends: native vector cosine when present, numpy brute force over the FTS5 prefilter otherwise. Stdio versus HTTP parity uses the dump tools flag output diff.
 
 ## Configuration
 
