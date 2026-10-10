@@ -109,48 +109,6 @@ flowchart TB
 - **OpenCode plugin:** injects memory, syncs skills at session start, and pushes local skill edits after writes.
 - **Maintenance:** evicts low-value memories when over capacity, archives stale context, rolls older context into episode summaries, and expires old tombstones.
 
-## In Depth
-
-### Memory ranking
-
-Memo ranks memories by combining semantic similarity, full-text relevance, and retention:
-
-$$
-S = 0.60V + 0.25T + 0.15R
-$$
-
-where
-
-$$
-V = \frac{\cos(\text{a},\text{b}) + 1}{2},
-\quad
-R = e^{-d/s}
-$$
-
-- $V$: normalized cosine similarity between the query and memory embeddings.
-- $T$: normalized full-text relevance, or zero when there is no match.
-- $R$: retention score based on age and stability.
-- $d$: age in days.
-- $s$: memory stability.
-
-Results are ordered by score, use count, update time, then key.
-
-### Stability and updates
-
-Using a memory can increase its stability, slowing future retention decay. Growth is bounded by the stability cap for the memory type.
-
-When a fact is saved, Memo may update an existing row or create a related one. Contradictory facts can supersede older facts while preserving their history.
-
-### Temporal validity
-
-Memo uses `valid_from` and `valid_to` to represent when a memory applies. A memory is effective at time $T$ when its status is current, it has started, and it has not expired:
-
-$$
-\text{valid\_from} \le T
-\quad\land\quad
-(\text{valid\_to} = \text{NULL} \lor \text{valid\_to} > T)
-$$
-
 ## Configuration
 
 Required:
