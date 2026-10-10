@@ -140,12 +140,55 @@ flowchart TB
 
 ### Testing
 
+Suite: 81 passed in 10.97s via `pytest` (DB path `src` is already configured in `pyproject.toml`). Per file counts from the collect only run:
+
+```text
+tests/test_db.py             2  schema plus migrations plus FTS triggers
+tests/test_e2e.py            6  plugin round trips plus enforcement texts
+tests/test_memory_save.py   10  save ladder plus classify plus trivia gate
+tests/test_memory_search.py 16  read path plus temporal plus delete plus bootstrap
+tests/test_models_drift.py   2  schema drift guard, 11 assertions
+tests/test_rank.py            4  embeddings plus fusion rank
+tests/test_server.py         21  janitor plus server wiring plus envelopes
+tests/test_skills.py          9  put/get/update/install plus tombstone
+tests/test_sync.py           11  sync dual mode plus L0 join
+total                        81
+```
+
+`scripts/replay_t1_t8.py` replays the eight spec transcript contracts end to end against a scratch DB, one evidence line each, exits nonzero on mismatch:
+
+```text
+T-1 cold open: 5 memories plus 2 skills, summary shape, empty 2nd sync
+T-2 contradiction: supersede chain, current only search, history visible with flag
+T-3 skill e2e: put v1 plus no op re put plus get body plus web bundle
+T-4 burst: fill to 250 cap, newest 10 present, victims archived age >= 1d
+T-5 truncation: 200 skills, truncated true, filter narrows to one
+T-6 crash recovery: apply 1 of 3 deltas, next sync returns remaining 2
+T-7 retry: same fact twice, created then updated/merged, one row
+T-8 future validity: 2027-01-01 stored unclamped, now excludes, 2027-06-01 returns
+```
+
+Key constants the suite pins down (constant => value => where enforced):
+
+```text
+namespace cap => 250 => maintenance CAP, over cap insert archives victim
+janitor bound => max_moves 5 => maintenance.run, one bounded pass per write
+cron sweep => score below 0.1 plus uses 0 plus age over 90d => maintenance, analysis and context only
+context rollup => age over 30d => maintenance, one Episode row, sources archived
+tombstone expiry => age over 30d => maintenance drops row, resurrection window closed
+candidate scan => 500 rows => memory search prefilter over FTS5
+embeddings => 384 float32 => embeddings DIM, offline fetch failure maps to internal
+fusion rank => 0.6V plus 0.25T plus 0.15R => rank, cosine remapped (cos+1)/2
+drift guard => 2 tests, 11 assertions => generated schema equals committed plus ORM equals migrated
+```
+
+Skill install tests mock the fetch, no live network in CI. Vector tests cover both backends: native vector cosine when present, numpy brute force over the FTS5 prefilter otherwise. Stdio versus HTTP parity uses the dump tools flag output diff.
+
 ```text
 pytest
 python scripts/replay_t1_t8.py
+memo with DB path flag plus dump tools flag (tool list for stdio versus HTTP parity)
 ```
-
-`pytest` runs the full suite in `tests/` (DB path `src` is already configured in `pyproject.toml`). The replay script replays the eight spec task contracts end to end against a scratch DB. Skill install tests mock the fetch, no live network in CI. Vector tests cover both backends: native vector cosine when present, numpy brute force over the FTS5 prefilter otherwise. Stdio versus HTTP parity uses the dump tools flag output diff.
 
 ## Configuration
 
