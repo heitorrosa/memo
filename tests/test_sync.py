@@ -300,3 +300,40 @@ def test_sync_prompt_names_no_longer_route():
     assert "offset, total" in text
     assert "bootstrap_md, truncated, total" in text
     assert "not_found" in text
+
+
+def test_sync_prompt_documents_hash_recipe():
+    # Hash hardening (B1): the exact recipe is agent-visible in the sync prompt.
+    text = prompt_store.render("tool_skill_sync")
+    assert "sha256-hex" in text
+    assert "frontmatter block removed" in text
+    assert "whitespace trimmed" in text
+    assert "hash_body_normalized" in text
+
+
+def test_trailing_whitespace_no_churn(tmp_path):
+    # Hash hardening (B2): a stored body and a client body differing only by
+    # surrounding whitespace must NOT emit a delta. Without normalization the
+    # hand-edited trailing newline churns a re-download every sync.
+    from memo.skills.crud import hash_body_normalized
+    conn = _mem(tmp_path)
+    _put(conn, "s", body="body text\n")   # server body ends in a newline
+    _put(conn, "t", body="clean body")    # server body has no newline
+    known = _known([
+        ("s", hash_body_normalized("body text")),    # client: no newline
+        ("t", hash_body_normalized("clean body\n")),  # client: gained a newline
+    ])
+    r = _files(conn, known=known)
+    assert r["files_to_write"] == [] and r["files_to_delete"] == []
+    conn.close()
+
+
+def test_emitted_hash_is_normalized(tmp_path):
+    # The delta echoes the normalized hash, so the client's snapshot stores a
+    # value that survives a trailing-newline edit without a re-download.
+    from memo.skills.crud import hash_body_normalized
+    conn = _mem(tmp_path)
+    _put(conn, "s", body="body text\n")
+    w = _files(conn)["files_to_write"][0]
+    assert w["hash"] == hash_body_normalized("body text\n")
+    conn.close()

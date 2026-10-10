@@ -8,7 +8,7 @@ from memo import db as memo_db
 from memo import maintenance
 from memo import prompts as prompt_store
 from memo.models.orm import Skill
-from memo.skills.crud import build_frontmatter, l0_line
+from memo.skills.crud import build_frontmatter, hash_body_normalized, l0_line
 
 # Routing is by the agent's DECLARED persist verdict, never by name: any
 # non-empty capabilities declaration yields a file delta; every other caller
@@ -45,7 +45,8 @@ def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
     if known is None:
         writes = [
             {"path": f"skills/{name}/SKILL.md",
-             "content": build_frontmatter(name, description, version, body), "hash": body_hash}
+             "content": build_frontmatter(name, description, version, body),
+             "hash": hash_body_normalized(body)}
             for name, description, body, body_hash, version in live
         ]
         deletes: list[dict] = []
@@ -54,11 +55,15 @@ def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
             entry.get("name"): entry.get("hash") for entry in known
             if isinstance(entry.get("name"), str) and isinstance(entry.get("hash"), str)
         }
-        writes = [
-            {"path": f"skills/{name}/SKILL.md",
-             "content": build_frontmatter(name, description, version, body), "hash": body_hash}
-            for name, description, body, body_hash, version in live if have.get(name) != body_hash
-        ]
+        writes = []
+        for name, description, body, body_hash, version in live:
+            # Normalized comparison: whitespace-only drift never looks dirty.
+            compare_hash = hash_body_normalized(body)
+            if have.get(name) != compare_hash:
+                writes.append({
+                    "path": f"skills/{name}/SKILL.md",
+                    "content": build_frontmatter(name, description, version, body),
+                    "hash": compare_hash})
         # Tombstoned OR unknown-to-server names the client lists -> delete.
         # A client that applied the delete stops listing the name, so each
         # delete surfaces once; a stale known re-gets it (F-12), never the body.

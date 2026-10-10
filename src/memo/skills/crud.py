@@ -27,6 +27,17 @@ def hash_body(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def hash_body_normalized(body: str) -> str:
+    """Comparison/echo hash: surrounding whitespace is trimmed BEFORE hashing.
+
+    A hand-edited file that merely gained a trailing newline must not look
+    dirty and churn a re-download every sync, so sync compares and echoes this
+    hash instead of the raw one. Stored bodies and their ``hash`` column are
+    never mutated — only the compared/echoed value is normalized.
+    """
+    return hashlib.sha256(body.strip().encode("utf-8")).hexdigest()
+
+
 def shorten_text(description: str, words: int = 20) -> str:
     parts = description.split()
     return description if len(parts) <= words else " ".join(parts[:words]) + " …"
