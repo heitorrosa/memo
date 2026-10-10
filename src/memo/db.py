@@ -1,10 +1,20 @@
-"""Unified memo.db connect + migrate (spec §§5-6)."""
+"""Unified memo.db connect + migrate (spec §§5-6), Peewee-backed.
+
+SQL text stays byte-identical to memo.models DDL (v1 design: keep the
+strings, move execution onto Peewee). connect() still hands out the
+raw sqlite3 connection (every call site + `with conn:` transaction
+shape untouched) and binds the deferred Peewee database in orm.py to
+the SAME file, so new code can use ORM queries + database.atomic().
+Domain migrations (M-017) run raw SQL as today; playhouse.migrate's
+SqliteMigrator is exposed for future structured ops.
+"""
 
 from __future__ import annotations
 
 import sqlite3
 
 from memo.models import render_schema
+from memo.models.orm import database as peewee_database
 
 MEMO_SCHEMA_VERSION = 3
 
@@ -26,6 +36,40 @@ SEED_META = (
     ("skills_schema_1", "applied"),
 )
 
+PRAGMAS = {"journal_mode": "WAL", "foreign_keys": 1, "busy_timeout": 5000}
+
+
+def peewee_init(path: str):
+    """Bind the deferred ORM database to path (same file as connect)."""
+    peewee_database.init(path, pragmas=PRAGMAS)
+    return peewee_database
+
+
+def atomic():
+    """Peewee transaction context for new ORM call sites."""
+    return peewee_database.atomic()
+
+
+def migrator():
+    """SqliteMigrator bound to the ORM database (structured migrations)."""
+    from playhouse.migrate import SqliteMigrator
+
+    return SqliteMigrator(peewee_database)
+
+
+def probe_single_writer(conn: sqlite3.Connection) -> bool:
+    """BEGIN IMMEDIATE probe: proves this process can take the write lock."""
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("ROLLBACK")
+        return True
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        return False
+
 
 def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=5.0)
@@ -39,6 +83,7 @@ def connect(path: str) -> sqlite3.Connection:
             sqlite_vec.load(conn)
         except Exception:
             pass
+    peewee_init(path)
     return conn
 
 
