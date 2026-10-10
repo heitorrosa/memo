@@ -10,6 +10,7 @@ dependencies = [
   "numpy>=1.26",
   "httpx>=0.27",
   "uvicorn>=0.30",
+  "peewee>=4.5.3",
   # Newest WITH a win64 wheel — pin DOWN if the newest lacks one, never build from source (§38, Q-03).
   "sqlite-vec>=0.1.6",
 ]
