@@ -45,17 +45,19 @@ RAW_TAIL: str = (
 # against this partially-initialized module — safe because database is
 # defined above these imports, and memo.models.__init__ always runs
 # this module before any per-table submodule import.
+from memo.models.agents import Agent, AgentState
 from memo.models.memories import ArchivedMemory, Episode, Memory, MemoryFTS
 from memo.models.meta import MemoMeta
 from memo.models.skills import Skill, utc_now
 
 HEADER: str = ("-- GENERATED from memo.models: do not hand-edit. "
-               "Edit src/memo/models/{memories,skills,meta}.py, then run `python -m memo.models`.")
+               "Edit src/memo/models/{memories,skills,meta,agents}.py, then run `python -m memo.models`.")
 
 # Tables owned by create_tables (creation order: parents before FTS child).
-CREATE_MODELS = [MemoMeta, Memory, Episode, Skill, MemoryFTS]
+CREATE_MODELS = [MemoMeta, Memory, Episode, Skill, MemoryFTS, Agent, AgentState]
 
-MODELS = [MemoMeta, Memory, MemoryFTS, ArchivedMemory, Episode, Skill]
+MODELS = [MemoMeta, Memory, MemoryFTS, ArchivedMemory, Episode, Skill,
+          Agent, AgentState]
 
 
 def render_schema() -> str:
@@ -102,6 +104,8 @@ __all__ = [
     "ArchivedMemory",
     "Episode",
     "Skill",
+    "Agent",
+    "AgentState",
     "database",
     "render_schema",
     "utc_now",

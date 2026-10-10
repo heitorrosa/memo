@@ -30,6 +30,8 @@ def test_orm_models_match_migrated_schema(tmp_path):
         assert {f.column_name for f in orm.ArchivedMemory._meta.sorted_fields} == columns("archived_memories")
         assert {f.column_name for f in orm.Episode._meta.sorted_fields} == columns("episodes")
         assert {f.column_name for f in orm.Skill._meta.sorted_fields} == columns("skills")
+        assert {f.column_name for f in orm.Agent._meta.sorted_fields} == columns("agents")
+        assert {f.column_name for f in orm.AgentState._meta.sorted_fields} == columns("agent_state")
         assert orm.MemoryFTS._meta.options == {"content": "memories", "content_rowid": "rowid"}
         fts_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE name='memories_fts'").fetchone()[0]

@@ -23,10 +23,22 @@ from memo.models.orm import database as peewee_database
 
 MEMO_SCHEMA_VERSION = 3
 
+
+def _create_agents(migrator) -> None:
+    """Create the agents/agent_state tables through the migrator's database.
+
+    playhouse.migrate has no CREATE TABLE op, so the structural change runs
+    via migrator.database.create_tables (safe, idempotent) — the recorded
+    `agents_schema_1` key is what marks the domain migration applied.
+    """
+    models = [orm_models.Agent, orm_models.AgentState]
+    with migrator.database.bind_ctx(models):
+        migrator.database.create_tables(models, safe=True)
+
+
 # (domain, version, op): op(migrator) applies structural alterations via
-# playhouse.migrate (recorded under f"{domain}_schema_{version}"). Empty:
-# v3 needs no alterations (M-017 slot kept for future domains).
-MIGRATIONS: list = []
+# playhouse.migrate (recorded under f"{domain}_schema_{version}").
+MIGRATIONS: list = [("agents", 1, _create_agents)]
 
 HAS_VEC = False
 try:
