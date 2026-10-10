@@ -21,7 +21,7 @@ def bootstrap_text(conn, memory_on=True, skills_on=True) -> str:
     if memory_on and skills_on:
         return summary.bootstrap_text(conn)
     parts = [prompt_store.render("bootstrap_title"),
-             prompt_store.render("heading_orientation"), summary.ORIENTATION]
+             prompt_store.render("heading_orientation"), skills.ORIENTATION]
     if memory_on:
         memory_lines = summary.top_memories_lines(conn)
         parts += [prompt_store.render("top_memories_heading",

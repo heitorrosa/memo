@@ -29,5 +29,6 @@
   "tool_skill_update": "Role: skill annotator. Task: append ONE revision note to an existing skill. Context: history is append-only; each update adds a dated Revision section. Hard constraints: update appends and NEVER rewrites history; full rewrites MUST use skill_put. Output format: {{hash, version}}. Failure handling: a missing or tombstoned skill returns not_found; NEVER recreate through update, use skill_put.",
   "top_memories_heading": "## Top memories ({count})",
   "web_index_truncated_heading": "## Skill index ({total} - truncated, showing {shown} - refine with skill_sync filter)",
-  "web_l0_suffix": " → `skill_get(\"{name}\")` for the body."
+  "web_l0_suffix": " → `skill_get(\"{name}\")` for the body.",
+  "web_paste_fallback": "## Web paste fallback (zero-MCP)\nRole: zero-MCP web harness (DeepSeek web and similar) with no reachable tools. Task: hold the pasted skill index below and consult it before any task. Context: skills below are pasted; the bundle IS the integration here, and no MCP server or tool call exists. Hard constraints: 1. Quote the skill name when using one. 2. Keep the pasted index in mind for the whole conversation; check it before any task. 3. NEVER fabricate a tool receipt or claim a tool ran; there are no tools. Output format: prose; name the skill in backticks when you apply it. Failure handling: if the index is truncated, ask the human to re-paste a filtered bundle; NEVER proceed on a partial index unrefined."
 }

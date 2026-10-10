@@ -16,9 +16,6 @@ from memo import prompts as prompt_store
 from memo.models.orm import Memory as OrmMemory
 from memo.models.orm import Skill as OrmSkill
 
-ORIENTATION = skills.ORIENTATION
-
-
 def age_days_label(updated_at: str) -> str:
     try:
         dt = datetime.datetime.fromisoformat(updated_at)
@@ -57,11 +54,12 @@ def bootstrap_text(conn: sqlite3.Connection) -> str:
     parts = [
         prompt_store.render("bootstrap_title"),
         prompt_store.render("heading_orientation"),
-        ORIENTATION,
+        skills.ORIENTATION,
         prompt_store.render("top_memories_heading", count=len(top_memories)),
         *(top_memories or [prompt_store.render("empty_memories")]),
         prompt_store.render("skill_index_heading_full", count=len(skill_index)),
         *(skill_index or [prompt_store.render("empty_skills")]),
         f"## {stats_line(conn)}",
+        prompt_store.render("web_paste_fallback"),
     ]
     return "\n".join(parts)
