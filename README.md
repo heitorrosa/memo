@@ -129,6 +129,7 @@ Optional:
 - `MEMO_DISABLE_SKILLS=1`: disable skill tools and the skill index.
 - `MEMO_ENDPOINT`: client endpoint, default `http://localhost:8000/mcp`.
 - `MEMO_LOG`: log level, `debug`, `info`, or `warn`.
+- `MEMO_TRUSTED_HOSTS`: comma-separated extra `Host` header values allowed on `/mcp` (e.g. `memo.example.com` for a Cloudflare tunnel or reverse proxy). DNS-rebinding protection is on; only localhost is allowed by default, so any public hostname must be listed here. Each entry is also allowed with any port.
 
 Boolean flags also accept `true` or `yes`, case-insensitively. Both domains cannot be disabled at once. The CLI supports HTTP mode, port selection, health checks, database backups, and tool-list output for transport parity checks. Backups can be made while the server is running using the CLI backup command.
 

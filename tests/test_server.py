@@ -370,6 +370,59 @@ def test_health(tmp_path):
         th.join(timeout=10)
 
 
+def test_http_unknown_host_rejected(tmp_path):
+    """DNS-rebinding guard: a Host not in the allowlist is refused."""
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18095)
+    try:
+        r = httpx.post("http://127.0.0.1:18095/mcp", json=_init_body(),
+                       headers={**JSON_ONLY, "Authorization": "Bearer t",
+                                "Host": "evil.example"},
+                       timeout=5.0)
+        assert r.status_code == 421
+        assert "Invalid Host header" in r.text
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_http_trusted_host_from_env_passes(tmp_path, monkeypatch):
+    """MEMO_TRUSTED_HOSTS lets a tunnel/public hostname reach /mcp (with auth)."""
+    import httpx
+    monkeypatch.setenv("MEMO_TRUSTED_HOSTS", "memo.tunnel.example")
+    srv, th = serve(str(tmp_path / "m.db"), 18096)
+    try:
+        r = httpx.post("http://127.0.0.1:18096/mcp", json=_init_body(),
+                       headers={**JSON_ONLY, "Authorization": "Bearer t",
+                                "Host": "memo.tunnel.example"},
+                       timeout=5.0)
+        assert r.status_code == 200, r.text
+        assert r.json()["result"]["serverInfo"]["name"] == "memo"
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_http_default_hosts_unchanged(tmp_path, monkeypatch):
+    """Env unset: localhost still works, non-allowlisted hosts still refused."""
+    import httpx
+    monkeypatch.delenv("MEMO_TRUSTED_HOSTS", raising=False)
+    srv, th = serve(str(tmp_path / "m.db"), 18097)
+    try:
+        ok = httpx.post("http://127.0.0.1:18097/mcp", json=_init_body(),
+                        headers={**JSON_ONLY, "Authorization": "Bearer t"},
+                        timeout=5.0)
+        assert ok.status_code == 200, ok.text
+        bad = httpx.post("http://127.0.0.1:18097/mcp", json=_init_body(),
+                         headers={**JSON_ONLY, "Authorization": "Bearer t",
+                                  "Host": "memo.tunnel.example"},
+                         timeout=5.0)
+        assert bad.status_code == 421
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
 def test_http_auth_reject(tmp_path):
     import httpx
     srv, th = serve(str(tmp_path / "m.db"), 18082)

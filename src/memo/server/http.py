@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextvars
 import hmac
+import os
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
@@ -12,6 +13,7 @@ from mcp.server.streamable_http import (
     CONTENT_TYPE_SSE,
     StreamableHTTPServerTransport,
 )
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
@@ -119,6 +121,40 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
+# DNS-rebinding allowlist defaults: localhost-only, matching what the MCP SDK
+# auto-enables when FastMCP is constructed with a loopback host. Extra Host
+# values (e.g. a Cloudflare tunnel hostname) are added via MEMO_TRUSTED_HOSTS.
+_DEFAULT_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+_DEFAULT_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+
+
+def _trusted_security() -> TransportSecuritySettings:
+    """Transport allowlist for the MCP endpoint.
+
+    MEMO_TRUSTED_HOSTS is a comma-separated list of extra Host header values
+    (tunnel/public hostnames). Each entry is allowed verbatim and with any port
+    (`host:*`), and both http/https Origins are derived so browser clients on
+    the same hostname are not blocked. Unset => localhost defaults only, i.e.
+    the previous behaviour unchanged.
+    """
+    extra = [h.strip() for h in os.getenv("MEMO_TRUSTED_HOSTS", "").split(",")
+             if h.strip()]
+    hosts = list(_DEFAULT_HOSTS)
+    origins = list(_DEFAULT_ORIGINS)
+    for entry in extra:
+        hosts.append(entry)
+        if not entry.endswith(":*"):
+            hosts.append(f"{entry}:*")
+        for scheme in ("http", "https"):
+            origins.append(f"{scheme}://{entry}")
+            origins.append(f"{scheme}://{entry}:*")
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
+
+
 def build_http_app(server, token: str):
     async def health_check(request):
         return JSONResponse({"ok": True, "version": VERSION,
@@ -127,6 +163,9 @@ def build_http_app(server, token: str):
     # FastMCP builds its StreamableHTTPSessionManager with the module-level
     # transport class; swap in ours so the per-request flag is honoured.
     _session_manager.StreamableHTTPServerTransport = _NegotiatingTransport
+    # The session manager is created lazily on the next line and reads
+    # transport_security from settings at that point, so set it first.
+    server.settings.transport_security = _trusted_security()
     inner = server.streamable_http_app()
     mcp_app = _AcceptNegotiation(inner)
 
