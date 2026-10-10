@@ -1,4 +1,9 @@
-"""Pure tool impls (catch-all -> internal envelope, never raise)."""
+"""Pure tool impls (catch-all -> internal envelope, never raise).
+
+Peewee note: binding lives in the domain call sites (memory.save/search/
+remove, skills.*) resolved per-conn via db.orm_db — this layer stays
+lock + envelope + delegation only, no SQL of its own.
+"""
 from __future__ import annotations
 
 import time

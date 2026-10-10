@@ -1,8 +1,12 @@
 """Bounded janitor (spec §§16-17,23). Runs at the END of memory.save /
 skills.sync tails; scheduler-daily hits the same function (no 2nd path).
 
-Import rule: ONLY temporal (+stdlib/sqlite) — never memory/skills (tails
-call IN here via lazy import, so this module must not import them back).
+Peewee-backed: moves go through the ORM Memory/ArchivedMemory/Episode/
+Skill models bound to conn's own file (db.orm_db); energy math, grace,
+vetoes, budgets, and the signal-only log are untouched. ORM imports stay
+lazy inside functions so the top-level import graph is still temporal-only
+(tails call IN here via lazy import — this module must not import
+memory/skills back).
 """
 from __future__ import annotations
 
@@ -22,6 +26,11 @@ ARCHIVE_COLUMNS = ("key,namespace,value,type,embedding,stability,score,uses,"
               "created_at,updated_at,valid_from,valid_to,status,family_id,"
               "superseded_by,relation_type")
 
+_MEMORY_FIELDS = ("key", "namespace", "value", "type", "embedding",
+                  "stability", "score", "uses", "created_at", "updated_at",
+                  "valid_from", "valid_to", "status", "family_id",
+                  "superseded_by", "relation_type")
+
 
 def age_days(created_at: str, now) -> float | None:
     try:
@@ -40,27 +49,48 @@ def touched_after(updated_at: str, t0) -> bool:
 
 
 def archive_row(conn, key, namespace, now_iso, reason):
-    row = conn.execute(
-        f"SELECT {ARCHIVE_COLUMNS} FROM memories WHERE key=? AND namespace=?",
-        (key, namespace)).fetchone()
-    if row is None:
-        return False
-    with conn:
-        conn.execute(
-            f"INSERT INTO archived_memories({ARCHIVE_COLUMNS},archived_at,"
-            f"archived_reason) VALUES({','.join('?' for _ in range(16))},?,?)",
-            (*row, now_iso, reason))
-        conn.execute("DELETE FROM memories WHERE key=? AND namespace=?",
-                     (key, namespace))
+    from memo import db as memo_db
+    from memo.models import orm as orm_models
+    from memo.models.orm import ArchivedMemory as OrmArchived
+    from memo.models.orm import Memory as OrmMemory
+
+    peewee_db = memo_db.orm_db(conn)
+    with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
+        row = OrmMemory.get_or_none(
+            (OrmMemory.key == key) & (OrmMemory.namespace == namespace))
+        if row is None:
+            return False
+        embedding = row.embedding
+        if isinstance(embedding, (memoryview, bytearray)):
+            embedding = bytes(embedding)
+        OrmArchived.create(
+            key=row.key, namespace=row.namespace, value=row.value,
+            type=row.type, embedding=embedding, stability=row.stability,
+            score=row.score, uses=row.uses, created_at=row.created_at,
+            updated_at=row.updated_at, valid_from=row.valid_from,
+            valid_to=row.valid_to, status=row.status,
+            family_id=row.family_id, superseded_by=row.superseded_by,
+            relation_type=row.relation_type,
+            archived_at=now_iso, archived_reason=reason)
+        (OrmMemory.delete()
+         .where((OrmMemory.key == key) & (OrmMemory.namespace == namespace))
+         .execute())
     return True
 
 
 def pick_victim(conn, namespace, now) -> str | None:
     """argmin (uses/max(age,1))*exp(-age/S) over grace-passing currents."""
+    from memo import db as memo_db
+    from memo.models.orm import Memory as OrmMemory
+
+    with memo_db.orm_ctx(conn):
+        rows = list((OrmMemory.select(
+            OrmMemory.key, OrmMemory.uses, OrmMemory.stability,
+            OrmMemory.created_at, OrmMemory.updated_at)
+            .where((OrmMemory.namespace == namespace)
+                   & (OrmMemory.status == "current")).tuples()))
     best, best_energy = None, None
-    for key, uses, stability, created_at, updated_at in conn.execute(
-            "SELECT key, uses, stability, created_at, updated_at FROM memories"
-            " WHERE namespace=? AND status='current'", (namespace,)):
+    for key, uses, stability, created_at, updated_at in rows:
         age = age_days(created_at, now)
         if age is None or age < GRACE_DAYS or touched_after(updated_at, now):
             continue
@@ -74,6 +104,12 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
         now: str | None = None) -> dict:
     """One bounded pass; idempotent. Returns
     {evicted: key|None, archived: [keys], rolled_up: episodes_created}."""
+    from memo import db as memo_db
+    from memo.models import orm as orm_models
+    from memo.models.orm import Episode as OrmEpisode
+    from memo.models.orm import Memory as OrmMemory
+    from memo.models.orm import Skill as OrmSkill
+
     sweep_time = temporal.parse_ts(now) if now else temporal.parse_ts(
         temporal.now_iso())
     now_iso = temporal.now_iso()
@@ -86,13 +122,17 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
         moves[0] -= 1
         return True
 
+    peewee_db = memo_db.orm_db(conn)
     # (1) over-cap loop, per namespace (cap counts current-only, M-006).
-    for (namespace,) in conn.execute(
-            "SELECT DISTINCT namespace FROM memories").fetchall():
+    with memo_db.orm_ctx(conn):
+        namespaces = [row.namespace for row in
+                      OrmMemory.select(OrmMemory.namespace).distinct()]
+    for namespace in namespaces:
         while take():
-            count = conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE namespace=?"
-                " AND status='current'", (namespace,)).fetchone()[0]
+            with memo_db.orm_ctx(conn):
+                count = (OrmMemory.select()
+                         .where((OrmMemory.namespace == namespace)
+                                & (OrmMemory.status == "current")).count())
             if count <= CAP:
                 moves[0] += 1  # take() only spent when we actually evict
                 break
@@ -107,19 +147,19 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
 
     # (2) cron triple-AND sweep; prefs/feedback EXEMPT (M-016).
     if moves[0] > 0:
-        rows = conn.execute(
-            "SELECT key, namespace, created_at, updated_at FROM memories"
-            " WHERE status='current' AND type IN ('analysis','context')"
-            " ORDER BY created_at").fetchall()
-        for key, namespace, created_at, updated_at in rows:
+        with memo_db.orm_ctx(conn):
+            rows = list((OrmMemory.select(
+                OrmMemory.key, OrmMemory.namespace, OrmMemory.created_at,
+                OrmMemory.updated_at, OrmMemory.score, OrmMemory.uses)
+                .where((OrmMemory.status == "current")
+                       & (OrmMemory.type.in_(["analysis", "context"])))
+                .order_by(OrmMemory.created_at).tuples()))
+        for key, namespace, created_at, updated_at, score, uses in rows:
             if moves[0] <= 0:
                 break
             age = age_days(created_at, sweep_time)
             if age is None or age <= CRON_AGE or touched_after(updated_at, sweep_time):
                 continue
-            score, uses = conn.execute(
-                "SELECT score, uses FROM memories WHERE key=? AND namespace=?",
-                (key, namespace)).fetchone()
             if score < CRON_SCORE and uses == CRON_USES:
                 if take():
                     archive_row(conn, key, namespace, now_iso, "cron")
@@ -127,35 +167,38 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
 
     # (3) context rollup >30d -> ONE episodes row (mechanical summary).
     if moves[0] > 0:
-        rows = conn.execute(
-            "SELECT key, namespace, value, created_at, updated_at FROM memories"
-            " WHERE status='current' AND type='context'"
-            " ORDER BY created_at").fetchall()
+        with memo_db.orm_ctx(conn):
+            rows = list((OrmMemory.select(
+                OrmMemory.key, OrmMemory.namespace, OrmMemory.value,
+                OrmMemory.created_at, OrmMemory.updated_at)
+                .where((OrmMemory.status == "current")
+                       & (OrmMemory.type == "context"))
+                .order_by(OrmMemory.created_at).tuples()))
         due = [(key, namespace, value, created_at) for key, namespace, value, created_at, updated_at in rows
                if (age_days(created_at, sweep_time) or 0) > ROLLUP_AGE
                and not touched_after(updated_at, sweep_time)][:moves[0]]
         if due:
             for _ in due:
                 take()
-            with conn:
-                conn.execute(
-                    "INSERT INTO episodes(summary,source_count,rolled_up_at,"
-                    "started_at,ended_at) VALUES(?,?,?,?,?)",
-                    ("auto-rollup of %d context rows: " % len(due)
-                     + " | ".join(value[:40] for _, _, value, _ in due),
-                     len(due), now_iso,
-                     min(created_at for _, _, _, created_at in due),
-                     max(created_at for _, _, _, created_at in due)))
-                for key, namespace, _, _ in due:
-                    archive_row(conn, key, namespace, now_iso, "rollup")
-                    archived.append(key)
+            with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
+                OrmEpisode.create(
+                    summary=("auto-rollup of %d context rows: " % len(due)
+                             + " | ".join(value[:40] for _, _, value, _ in due)),
+                    source_count=len(due), rolled_up_at=now_iso,
+                    started_at=min(created_at for _, _, _, created_at in due),
+                    ended_at=max(created_at for _, _, _, created_at in due))
+            for key, namespace, _, _ in due:
+                archive_row(conn, key, namespace, now_iso, "rollup")
+                archived.append(key)
             rolled = 1
 
     # (4) tombstone expiry >30d: drop the row (resurrection window closed).
     if moves[0] > 0:
-        for (name, updated_at) in conn.execute(
-                "SELECT name, updated_at FROM skills WHERE source='tombstone'"
-                " ORDER BY updated_at").fetchall():
+        with memo_db.orm_ctx(conn):
+            tombs = list((OrmSkill.select(OrmSkill.name, OrmSkill.updated_at)
+                          .where(OrmSkill.source == "tombstone")
+                          .order_by(OrmSkill.updated_at).tuples()))
+        for name, updated_at in tombs:
             if moves[0] <= 0:
                 break
             try:
@@ -164,8 +207,8 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
             except ValueError:
                 continue
             if age > TOMBSTONE_AGE and take():
-                with conn:
-                    conn.execute("DELETE FROM skills WHERE name=?", (name,))
+                with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
+                    (OrmSkill.delete().where(OrmSkill.name == name).execute())
 
     # ponytail: silent no-op runs; signal-only log keeps T-1..T-8 replay
     # readable (500+ saves) while preserving the per-action audit line.

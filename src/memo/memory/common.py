@@ -1,4 +1,8 @@
-"""Memory shared constants + row helpers (spec §§8-16)."""
+"""Memory shared constants + row helpers (spec §§8-16).
+
+Peewee-backed: fetch_row reads through the ORM Memory model (bound by
+db.orm_ctx to conn's own file); constants/predicates untouched.
+"""
 from __future__ import annotations
 
 import math
@@ -35,15 +39,27 @@ ARCHIVE_COLUMNS = ("key,namespace,value,type,embedding,stability,score,uses,"
 
 
 def fetch_row(conn, key, namespace):
-    record = conn.execute(
-        "SELECT key, value, type, embedding, stability, score, uses,"
-        " created_at, updated_at, valid_from, valid_to, status, family_id,"
-        " superseded_by, relation_type FROM memories WHERE key=? AND namespace=?",
-        (key, namespace)).fetchone()
-    return dict(zip(
-        ("key", "value", "type", "embedding", "stability", "score", "uses",
-         "created_at", "updated_at", "valid_from", "valid_to", "status",
-         "family_id", "superseded_by", "relation_type"), record)) if record else None
+    from memo import db as memo_db
+    from memo.models.orm import Memory as OrmMemory
+
+    with memo_db.orm_ctx(conn):
+        row = OrmMemory.get_or_none(
+            (OrmMemory.key == key) & (OrmMemory.namespace == namespace))
+    if row is None:
+        return None
+    embedding = row.embedding
+    if isinstance(embedding, (memoryview, bytearray)):
+        embedding = bytes(embedding)
+    return {
+        "key": row.key, "value": row.value, "type": row.type,
+        "embedding": embedding, "stability": row.stability,
+        "score": row.score, "uses": row.uses,
+        "created_at": row.created_at, "updated_at": row.updated_at,
+        "valid_from": row.valid_from, "valid_to": row.valid_to,
+        "status": row.status, "family_id": row.family_id,
+        "superseded_by": row.superseded_by,
+        "relation_type": row.relation_type,
+    }
 
 
 def is_trivia(value: str) -> bool:

@@ -1,12 +1,21 @@
 """Memory read path §14: embed→FTS→fuse→temporal BEFORE rank→filter→order→
-slice→touch-once."""
+slice→touch-once.
+
+Peewee-backed: FTS via MemoryFTS, touch UPDATEs via the ORM Memory model;
+the 500-row scan stays raw SQL (ORM Memory exposes no rowid field and the
+FTS score map is keyed by rowid — ORM cannot cover it). Cosine/fuse/order/
+temporal predicates untouched.
+"""
 from __future__ import annotations
 
 import math
 import sqlite3
 
+from memo import db as memo_db
 from memo import embeddings, errors, rank, temporal
 from memo.memory.common import BETA, R_FLOOR, STABILITY, S_CAP_X, fts_scores
+from memo.models import orm as orm_models
+from memo.models.orm import Memory as OrmMemory
 
 
 def search(conn: sqlite3.Connection, query: str, limit: int = 10,
@@ -30,6 +39,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
 
     query_embedding = embeddings.embed([query])[0]
     fts_hits = fts_scores(conn, query)
+    # raw: rowid needed for the FTS map; ORM Memory has no rowid field.
     id_rows = conn.execute(
         "SELECT rowid, key, value, type, embedding, stability, score, uses,"
         " created_at, updated_at, valid_from, valid_to, status, family_id"
@@ -73,15 +83,16 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
 
     scored = rank.order(scored)[:limit]
     touch_now = temporal.now_iso()
-    with conn:
+    peewee_db = memo_db.orm_db(conn)
+    with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         for result in scored:
             retention = math.exp(-max(0.0, result["age"]) / result["stab"])
             # M-006: superseded rows freeze R (no S growth); M-003 caps.
             new_stability = result["stab"] if result["status"] != "current" or retention < R_FLOOR else min(
                 result["stab"] * (1.0 + BETA * retention), S_CAP_X * STABILITY[result["type"]])
-            conn.execute(
-                "UPDATE memories SET score=score*1.1, uses=uses+1,"
-                " stability=?, updated_at=? WHERE key=? AND namespace=?",
-                (new_stability, touch_now, result["key"], namespace))
+            (OrmMemory.update(score=OrmMemory.score * 1.1, uses=OrmMemory.uses + 1,
+                              stability=new_stability, updated_at=touch_now)
+             .where((OrmMemory.key == result["key"]) & (OrmMemory.namespace == namespace))
+             .execute())
             result.pop("stab"), result.pop("age"), result.pop("updated"), result.pop("created"), result.pop("status")
     return scored
