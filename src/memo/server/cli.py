@@ -124,6 +124,8 @@ def main_http(argv: list[str] | None = None) -> int:
         return 2
     server = build_server(args.db, memory_on, skills_on)
     print(startup_line(args.db, db.HAS_VEC, memory_on, skills_on), file=sys.stderr)
+    # access_log=False: a token may arrive as ?access_token= and uvicorn's
+    # access log prints the full path+query. Off by policy, not just by level.
     uvicorn.run(build_http_app(server, token), host=args.host, port=args.port,
-                log_level="warning")
+                log_level="warning", access_log=False)
     return 0

@@ -335,7 +335,7 @@ def test_http_no_token_refuses(tmp_path, monkeypatch, capsys):
     assert "MEMO_TOKEN required" in capsys.readouterr().err  # M-033
 
 
-def serve(db_path, port, token="t"):
+def serve(db_path, port, token="t", log_level="error", access_log=False):
     import threading
     import time
     import httpx
@@ -344,7 +344,8 @@ def serve(db_path, port, token="t"):
     from memo.server.http import build_http_app
     app = build_http_app(build_server(db_path), token)
     srv = uvicorn.Server(uvicorn.Config(
-        app, host="127.0.0.1", port=port, log_level="error"))
+        app, host="127.0.0.1", port=port, log_level=log_level,
+        access_log=access_log))
     th = threading.Thread(target=srv.run, daemon=True)
     th.start()
     for _ in range(100):
@@ -381,6 +382,80 @@ def test_http_auth_reject(tmp_path):
     finally:
         srv.should_exit = True
         th.join(timeout=10)
+
+
+def test_http_query_token_accepted(tmp_path):
+    """ChatGPT custom-MCP fallback: token in ?access_token passes the gate."""
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18086)
+    try:
+        r = httpx.post("http://127.0.0.1:18086/mcp?access_token=t",
+                       json={}, timeout=5.0)
+        assert r.status_code != 401  # auth gate passed (downstream may 4xx)
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_http_query_token_wrong_rejected(tmp_path):
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18087)
+    try:
+        r = httpx.post("http://127.0.0.1:18087/mcp?access_token=wrong",
+                       json={}, timeout=5.0)
+        assert r.status_code == 401
+        assert r.json() == {"error": "unauthorized"}  # generic, no echo
+        assert "wrong" not in r.text
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_http_header_wins_over_query(tmp_path):
+    import httpx
+    srv, th = serve(str(tmp_path / "m.db"), 18088)
+    try:
+        base = "http://127.0.0.1:18088/mcp"
+        # bad header + good query -> header wins -> reject
+        assert httpx.post(base + "?access_token=t", json={},
+                          headers={"Authorization": "Bearer wrong"},
+                          timeout=5.0).status_code == 401
+        # good header + bad query -> header wins -> accept
+        assert httpx.post(base + "?access_token=wrong", json={},
+                          headers={"Authorization": "Bearer t"},
+                          timeout=5.0).status_code != 401
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_query_token_never_logged(tmp_path, capsys):
+    """A token in the URL must never reach logs. Positive control proves
+    uvicorn's access log WOULD print it; access_log=False is the fix."""
+    import httpx
+    secret = "supersecret-query-token-xyz"
+    # control: access log on + info level -> path+query is emitted
+    srv, th = serve(str(tmp_path / "m.db"), 18089, token=secret,
+                    log_level="info", access_log=True)
+    try:
+        httpx.post(f"http://127.0.0.1:18089/mcp?access_token={secret}",
+                   json={}, timeout=5.0)
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+    assert secret in capsys.readouterr().out  # risk is real (uvicorn logs to stdout)
+    # fix: production config (access_log=False) suppresses it at any level
+    srv, th = serve(str(tmp_path / "m.db"), 18090, token=secret,
+                    log_level="info", access_log=False)
+    try:
+        httpx.post(f"http://127.0.0.1:18090/mcp?access_token={secret}",
+                   json={}, timeout=5.0)
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
 
 
 def test_http_tool_parity(tmp_path, capsys):

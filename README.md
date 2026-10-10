@@ -113,7 +113,7 @@ flowchart TB
 
 Required:
 
-- `MEMO_TOKEN`: bearer token for HTTP MCP requests.
+- `MEMO_TOKEN`: bearer token for HTTP MCP requests. Send it as an `Authorization: Bearer <token>` header (preferred), or — for clients that cannot set headers, such as ChatGPT custom MCP — as the `?access_token=<token>` query parameter on the `/mcp` URL. If both are present the header wins. URL tokens are less safe: they leak into proxy, gateway, and browser logs, so use the header wherever the client supports it.
 
 Optional:
 
