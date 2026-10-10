@@ -175,7 +175,59 @@ def test_l0_name_asc(tmp_path):
     conn.close()
 
 
-def test_unknown_harness(tmp_path):
+def test_unknown_no_caps_defaults_bundle(tmp_path):
+    # Unknown bare harness is NOT an error: it gets the bundle by default.
     conn = _mem(tmp_path)
-    assert skills.sync(conn, "carrier-pigeon")["error"] == "not_found"
+    _put(conn, "qol-deploy", desc="Ship the Vite app.")
+    b = skills.sync(conn, "carrier-pigeon")
+    assert b["mode"] == "bundle" and b["total"] == 1
+    assert "qol-deploy" in b["bootstrap_md"]
+    conn.close()
+
+
+def test_capable_web_gets_deltas(tmp_path):
+    # Capability beats name: a web harness that can persist skills gets a delta.
+    conn = _mem(tmp_path)
+    _put(conn, "qol-deploy", desc="Ship the Vite app.")
+    r = skills.sync(conn, "web", capabilities=["file_write"])
+    assert r["mode"] == "files" and r["total"] == 1
+    assert [w["path"] for w in r["files_to_write"]] == [
+        "skills/qol-deploy/SKILL.md"
+    ]
+    assert skills.sync(conn, "web", capabilities=["skill_create"])["mode"] == "files"
+    conn.close()
+
+
+def test_incapable_file_gets_bundle(tmp_path):
+    # A file-name harness declaring no persistence capability gets a bundle.
+    conn = _mem(tmp_path)
+    _put(conn, "qol-deploy", desc="Ship the Vite app.")
+    b = skills.sync(conn, "opencode", capabilities=["sandbox_only"])
+    assert b["mode"] == "bundle" and "qol-deploy" in b["bootstrap_md"]
+    assert skills.sync(conn, "opencode", capabilities=[])["mode"] == "bundle"
+    conn.close()
+
+
+def test_legacy_names_unchanged(tmp_path):
+    # Bare legacy names keep their historical mode when capabilities is omitted.
+    conn = _mem(tmp_path)
+    _put(conn, "qol-deploy", desc="Ship the Vite app.")
+    for name in ("opencode", "claude-code", "filesystem"):
+        assert skills.sync(conn, name)["mode"] == "files"
+    assert skills.sync(conn, "web")["mode"] == "bundle"
+    conn.close()
+
+
+def test_unknown_with_caps_gets_deltas(tmp_path):
+    conn = _mem(tmp_path)
+    _put(conn, "qol-deploy", desc="Ship the Vite app.")
+    r = skills.sync(conn, "some-future-harness", capabilities=["file_write"])
+    assert r["mode"] == "files"
+    conn.close()
+
+
+def test_malformed_harness_not_found(tmp_path):
+    conn = _mem(tmp_path)
+    assert skills.sync(conn, "")["error"] == "not_found"
+    assert skills.sync(conn, None)["error"] == "not_found"  # type: ignore[arg-type]
     conn.close()

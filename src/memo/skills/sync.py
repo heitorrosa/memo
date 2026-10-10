@@ -11,6 +11,12 @@ from memo.models.orm import Skill
 from memo.skills.crud import build_frontmatter, l0_line
 
 FILE_HARNESSES = ("opencode", "claude-code", "filesystem")
+# Routing is by CAPABILITY, not name: a harness that can persist skills
+# itself (a skill-creation tool or plain file writes) gets a file delta;
+# a harness without the means gets the L0 bundle. A bare harness name is
+# only a legacy hint for clients that cannot declare capabilities.
+FILE_CAPABILITIES = ("skill_create", "file_write")
+WEB_HARNESS = "web"
 PAGE_SIZE = 10
 PAGE_BYTES = 30 * 1024
 WEB_TRUNCATE_SKILLS = 150
@@ -115,18 +121,31 @@ def sync_web(conn: sqlite3.Connection, filter_text: str | None,
 
 def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None,
          filter: str | None = None, offset: int = 0,
-         limit: int | None = None) -> dict:
-    """Dual-mode sync (§§20-21). File harnesses get diffs (row-ahead crash
-    recovery: the row is truth, the next sync repairs files — M-022; the
-    CLIENT applies deletes-THEN-writes). Web gets the L0 bundle (L1 lazy via
-    get). Unknown harness -> not_found. Maintenance tail is wired by Task 7,
-    not here."""
-    if harness == "web":
-        return sync_web(conn, filter, offset, limit)
-    if harness not in FILE_HARNESSES:
+         limit: int | None = None,
+         capabilities: list[str] | None = None) -> dict:
+    """Dual-mode sync (§§20-21). Route by CAPABILITY, not name (§§20-21):
+    a harness declaring skill_create/file_write can persist skills itself and
+    gets a file diff; one without the means gets the L0 bundle. Bare names are
+    a legacy hint only (opencode/claude-code/filesystem -> files, web -> bundle)
+    and an unknown bare harness defaults to the bundle, never an error.
+    Only a malformed harness (non-string or empty) is not_found. File harnesses
+    apply deletes-THEN-writes; row-ahead crash recovery keeps the row as truth
+    (M-022). Maintenance tail is wired by Task 7, not here."""
+    if not isinstance(harness, str) or not harness:
         return errors.err("not_found", prompt_store.render(
             "err_unknown_harness", harness=harness))
-    return sync_files(conn, known, offset, limit)
+    if capabilities is not None:
+        caps = capabilities if isinstance(capabilities, (list, tuple, set)) else ()
+        wants_files = any(cap in FILE_CAPABILITIES for cap in caps)
+    elif harness == WEB_HARNESS:
+        wants_files = False
+    elif harness in FILE_HARNESSES:
+        wants_files = True
+    else:
+        wants_files = False  # unknown bare harness -> bundle, never an error
+    if wants_files:
+        return sync_files(conn, known, offset, limit)
+    return sync_web(conn, filter, offset, limit)
 
 
 # L4 tail (Task 7, additive §23): janitor at the END of every skill_sync.
@@ -136,8 +155,9 @@ original_sync = sync
 
 def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None,  # noqa: F811 — tail wraps the sync above
          filter: str | None = None, offset: int = 0,
-         limit: int | None = None) -> dict:
+         limit: int | None = None,
+         capabilities: list[str] | None = None) -> dict:
     out = original_sync(conn, harness, known=known, filter=filter,
-                     offset=offset, limit=limit)
+                     offset=offset, limit=limit, capabilities=capabilities)
     maintenance.run(conn)
     return out

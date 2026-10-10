@@ -87,9 +87,10 @@ def build_server(db_path: str, memory_on: bool | None = None,
         @server.tool(name="skill_sync", description=DESCRIPTIONS["skill_sync"])
         def skill_sync(harness: str, known: list | None = None,
                        filter: str | None = None, offset: int = 0,
-                       limit: int | None = None) -> dict:
+                       limit: int | None = None,
+                       capabilities: list | None = None) -> dict:
             return do_skill_sync(conn, harness, known, filter, offset,
-                                 limit, lock)
+                                 limit, lock, capabilities)
 
         @server.tool(name="skill_get", description=DESCRIPTIONS["skill_get"])
         def skill_get(name: str, version: int | None = None) -> dict:

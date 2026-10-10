@@ -263,7 +263,7 @@ def test_envelopes(tmp_path):
     assert server.do_memory_delete(conn, "ghost") == {
         "key": "ghost", "action": "not_found"}  # success-shaped, NOT error
     assert server.do_skill_get(conn, "nope")["error"] == "not_found"
-    assert server.do_skill_sync(conn, "carrier-pigeon")["error"] == "not_found"
+    assert server.do_skill_sync(conn, "")["error"] == "not_found"
     assert server.do_skill_install(conn, "bitbucket:x", "s")["error"] == "not_found"
     bad = server.do_skill_install(
         conn, "github:o/r", "s", fetch=lambda url: (_ for _ in ()).throw(

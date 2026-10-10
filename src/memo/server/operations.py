@@ -68,20 +68,23 @@ def do_memory_delete(conn, key, namespace="default", lock=None):
     return out
 
 
-def sync_call_locked(conn, harness, known, filt, offset, limit, lock):
+def sync_call_locked(conn, harness, known, filt, offset, limit, lock,
+                     capabilities=None):
     if lock is not None:
         with lock:
             return skills.sync(conn, harness, known=known, filter=filt,
-                               offset=offset, limit=limit)
+                               offset=offset, limit=limit,
+                               capabilities=capabilities)
     return skills.sync(conn, harness, known=known, filter=filt,
-                       offset=offset, limit=limit)
+                       offset=offset, limit=limit, capabilities=capabilities)
 
 
 def do_skill_sync(conn, harness, known=None, filt=None, offset=0, limit=None,
-                  lock=None):
+                  lock=None, capabilities=None):
     start = time.perf_counter()
     try:
-        out = sync_call_locked(conn, harness, known, filt, offset, limit, lock)
+        out = sync_call_locked(conn, harness, known, filt, offset, limit, lock,
+                               capabilities)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
         return internal_error(exc)
     row_count = len(out.get("files_to_write", [])) if isinstance(out, dict) else 0
