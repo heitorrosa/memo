@@ -221,3 +221,71 @@ def test_prompt_documents_agent_identity():
         "moved_since_last_sync",
     ):
         assert needle in text, f"missing agent-identity instruction: {needle!r}"
+
+
+# --- MCP surface: agent_id reachable through the registered tool ---
+
+def _server(tmp_path):
+    """Build the real MCP server over a tmp DB (same wiring a harness hits)."""
+    from memo.server.core import build_server
+
+    return build_server(str(tmp_path / "memo.db"))
+
+
+def _call(server, **args):
+    """Invoke the registered skill_sync tool and decode its JSON envelope."""
+    import asyncio
+    import json
+
+    res = asyncio.run(server.call_tool("skill_sync", args))
+    return json.loads(res[0].text)
+
+
+def test_mcp_schema_exposes_agent_id(tmp_path):
+    import asyncio
+
+    server = _server(tmp_path)
+    tool = next(t for t in asyncio.run(server.list_tools())
+                if t.name == "skill_sync")
+    assert "agent_id" in tool.inputSchema["properties"]  # reachable, not just named
+    server.memo_conn.close()
+
+
+def test_mcp_no_id_mints_and_returns(tmp_path):
+    server = _server(tmp_path)
+    _put(server.memo_conn, "qol-deploy")
+    out = _call(server, harness="opencode", capabilities=["persist"])
+    assert out["mode"] == "files"
+    assert isinstance(out["agent_id"], str) and len(out["agent_id"]) == 32
+    server.memo_conn.close()
+
+
+def test_mcp_id_only_delta_is_precise(tmp_path):
+    # Second MCP call carries ONLY the minted id: the server fills known[]
+    # from its stored snapshot, so only the changed skill comes back.
+    server = _server(tmp_path)
+    _put(server.memo_conn, "a", body="v1")
+    _put(server.memo_conn, "b", body="v1")
+    first = _call(server, harness="opencode", capabilities=["persist"])
+    aid = first["agent_id"]
+    assert len(first["files_to_write"]) == 2  # cold: full materialization
+    _put(server.memo_conn, "b", body="v2")
+    second = _call(server, harness="opencode", capabilities=["persist"],
+                   agent_id=aid)
+    assert [w["path"] for w in second["files_to_write"]] == ["skills/b/SKILL.md"]
+    assert second["agent_id"] == aid
+    server.memo_conn.close()
+
+
+def test_mcp_unknown_id_re_mints_never_errors(tmp_path):
+    server = _server(tmp_path)
+    _put(server.memo_conn, "a")
+    bogus = "deadbeef" * 4
+    out = _call(server, harness="opencode", capabilities=["persist"],
+                agent_id=bogus)
+    assert "error" not in out
+    assert out["agent_id"] != bogus and len(out["agent_id"]) == 32
+    # Re-mint is a fresh baseline: full materialization, no moved flags.
+    assert len(out["files_to_write"]) == 1
+    assert "moved_since_last_sync" not in out
+    server.memo_conn.close()
