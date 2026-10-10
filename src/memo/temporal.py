@@ -130,6 +130,7 @@ def in_window(row: dict, at: datetime.datetime) -> bool:
 
 def chain_walk(conn: sqlite3.Connection, family_id: str) -> list[dict]:
     """Oldest-first rows of one family (forward links, indexed, terminates)."""
+    # raw: temporal stays ORM-free per import rule §37 — predicate-adjacent read.
     rows = conn.execute(
         "SELECT key, namespace, value, type, status, family_id, superseded_by,"
         " valid_from, valid_to, relation_type, uses, score, created_at,"

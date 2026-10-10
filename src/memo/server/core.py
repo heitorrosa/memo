@@ -24,6 +24,7 @@ from memo.server.shared import resolve_domains, startup_line
 def server_connect(path: str) -> sqlite3.Connection:
     # Same shape as db.connect + check_same_thread=False: the HTTP layer
     # serves tools from worker threads behind one lock (single writer).
+    # raw: connection setup + PRAGMAs — ORM binds to this file after.
     conn = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

@@ -61,7 +61,7 @@ def orm_db(conn: sqlite3.Connection) -> SqliteDatabase:
     cached Database (WAL + busy_timeout make that safe).
     """
     try:
-        path = conn.execute("PRAGMA database_list").fetchone()[2]
+        path = conn.execute("PRAGMA database_list").fetchone()[2]  # raw: resolve conn's file for ORM binding; ORM cannot report its own file
     except Exception:
         return peewee_database
     if not path:
@@ -92,6 +92,7 @@ def migrator():
 
 def probe_single_writer(conn: sqlite3.Connection) -> bool:
     """BEGIN IMMEDIATE probe: proves this process can take the write lock."""
+    # raw: lock probe is connection-level — ORM has no equivalent.
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("ROLLBACK")
@@ -105,6 +106,7 @@ def probe_single_writer(conn: sqlite3.Connection) -> bool:
 
 
 def connect(path: str) -> sqlite3.Connection:
+    # raw: connection setup + PRAGMAs; peewee_init binds the ORM to SAME file.
     conn = sqlite3.connect(path, timeout=5.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -121,6 +123,8 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> int:
+    # raw: DDL application incl. FTS5 virtual table + triggers + CHECKs —
+    # ORM create_tables cannot express those; Models own all CRUD instead.
     with conn:
         conn.executescript(SCHEMA_TEXT)
         for key, value in SEED_META:

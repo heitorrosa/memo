@@ -32,9 +32,9 @@ def refuse_if_locked(path: str) -> bool:
     if path == ":memory:":
         return False
     try:
-        probe = sqlite3.connect(path, timeout=1.0)
+        probe = sqlite3.connect(path, timeout=1.0)  # raw: lock probe is connection-level, ORM has no equivalent
         try:
-            probe.execute("BEGIN IMMEDIATE")
+            probe.execute("BEGIN IMMEDIATE")  # raw: write-lock probe, ORM cannot express
             probe.execute("ROLLBACK")
             return False
         except sqlite3.OperationalError:
@@ -59,6 +59,7 @@ def health_probe(url: str) -> int:
 
 
 def backup_database(db_path: str, destination: str) -> int:
+    # raw: sqlite3 backup API is file-level, not CRUD — ORM cannot cover it.
     source_conn = sqlite3.connect(db_path, timeout=10.0)
     try:
         destination_conn = sqlite3.connect(destination)

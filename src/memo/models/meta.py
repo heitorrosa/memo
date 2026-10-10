@@ -1,7 +1,8 @@
-"""memo_meta registry table (spec §5)."""
+"""memo_meta registry table (spec §5). Thin re-export: canonical text lives
+in memo.models.orm (Peewee-canonical); this keeps the models/*.py import
+path stable for render_schema()."""
 from __future__ import annotations
 
-META_DDL: str = (
-    "CREATE TABLE IF NOT EXISTS memo_meta(\n"
-    "  k TEXT PRIMARY KEY, v TEXT NOT NULL);"
-)
+from memo.models.orm import META_DDL
+
+__all__ = ["META_DDL"]

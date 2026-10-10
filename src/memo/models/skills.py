@@ -1,10 +1,8 @@
-"""Skills-domain table (spec §5)."""
+"""Skills-domain table (spec §5). Thin re-export: canonical text lives in
+memo.models.orm (Peewee-canonical); this keeps the models/*.py import path
+stable for render_schema()."""
 from __future__ import annotations
 
-SKILLS_DDL: str = (
-    "CREATE TABLE IF NOT EXISTS skills(\n"
-    "  name TEXT PRIMARY KEY, description TEXT NOT NULL, body TEXT NOT NULL,\n"
-    "  hash TEXT NOT NULL, version INTEGER DEFAULT 1, source TEXT DEFAULT 'local',\n"
-    "  created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),\n"
-    "  updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')));"
-)
+from memo.models.orm import SKILLS_DDL
+
+__all__ = ["SKILLS_DDL"]
