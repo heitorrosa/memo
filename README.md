@@ -122,8 +122,8 @@ $$
 where
 
 $$
-V = \frac{\cos(\mathbf{a},\mathbf{b}) + 1}{2},
-\qquad
+V = \frac{\cos(\text{a},\text{b}) + 1}{2},
+\quad
 R = e^{-d/s}
 $$
 
@@ -148,7 +148,7 @@ Memo uses `valid_from` and `valid_to` to represent when a memory applies. A memo
 $$
 \text{valid\_from} \le T
 \quad\land\quad
-(\text{valid\_to} = \varnothing \;\lor\; \text{valid\_to} > T)
+(\text{valid\_to} = \text{NULL} \lor \text{valid\_to} > T)
 $$
 
 ## Configuration
