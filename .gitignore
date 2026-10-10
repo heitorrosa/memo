@@ -1,8 +1,11 @@
-# Python bytecode + caches (never committed; local-only)
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
 .coverage
+.venv-gate/
 .env
 models/
+build/
+*.egg-info/
+data/
