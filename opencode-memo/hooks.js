@@ -8,6 +8,10 @@ import path from "node:path";
 const endpoint = () => process.env.MEMO_ENDPOINT ?? "http://localhost:8000/mcp";
 const token = () => process.env.MEMO_TOKEN ?? "";
 
+// opencode's native global skills dir (where bare `skill`/skill_create resolve).
+const defaultSkillsDir = () =>
+  path.join(process.env.HOME ?? "~", ".config/opencode/skills");
+
 const HERMES_BLOCK = new URL("./templates/hermes-block.md", import.meta.url);
 
 async function rpc(method, params) {
@@ -62,7 +66,7 @@ export async function transform(systemText, { memoryMd = "", userMd = "" } = {})
 /** Session open: resource summary + skill_sync deltas (deletes THEN writes).
  *  Returns {summary, applied} or {stale:true, warning} — never throws. */
 export async function onSessionStart({ skillsDir, memoryPath, userPath } = {}) {
-  const dir = skillsDir ?? path.join(process.env.HOME ?? "~", ".config/opencode/skills");
+  const dir = skillsDir ?? defaultSkillsDir();
   try {
     const [sum, sync] = await Promise.all([
       rpc("resources/read", { uri: "memo://summary" }),
@@ -89,11 +93,26 @@ export async function onSessionStart({ skillsDir, memoryPath, userPath } = {}) {
 
 const _timers = new Map();
 
-/** After hook: skills/**\/SKILL.md writes -> skill_put(source='local-hook').
- *  Debounced 2s per path; logs, never throws. */
-export function onAfterWrite(filePath, { skillsDir } = {}) {
-  if (!filePath.includes(`${path.sep}skills${path.sep}`) || !filePath.endsWith("SKILL.md"))
-    return;
+/** Map either a file-write path (string) or a native skill tool event
+ *  ({tool:"skill_create"|"skill_update", input:{name}}) to a SKILL.md path. */
+function resolveSkillPath(event, skillsDir) {
+  if (typeof event === "string") {
+    return event.includes(`${path.sep}skills${path.sep}`) && event.endsWith("SKILL.md")
+      ? event : null;
+  }
+  const tool = event?.tool;
+  if ((tool === "skill_create" || tool === "skill_update") && event?.input?.name) {
+    return path.join(skillsDir ?? defaultSkillsDir(), `${event.input.name}`, "SKILL.md");
+  }
+  return null;
+}
+
+/** After hook: skills/**\/SKILL.md writes AND native skill_create/skill_update
+ *  tool events -> skill_put(source='local-hook'). Debounced 2s per resolved
+ *  path; logs, never throws. */
+export function onAfterWrite(event, { skillsDir } = {}) {
+  const filePath = resolveSkillPath(event, skillsDir);
+  if (!filePath) return;
   clearTimeout(_timers.get(filePath));
   _timers.set(filePath, setTimeout(async () => {
     try {
