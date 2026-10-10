@@ -1,28 +1,44 @@
-"""Canonical schema source (Task 5, Peewee-canonical): Model classes in
-memo.models.orm own every CRUD path; the DDL text constants beside them
-are the single raw-SQL schema source (FTS5/triggers/CHECKs/CTAS only —
-Peewee cannot express those). models/*.py are thin re-exports; schema.sql
-is a GENERATED artifact (header line says so) — never hand-edit it.
+"""Schema entry point: re-exports the Peewee Models (plus render_schema)
+from memo.models.orm — no DDL strings anywhere. `python -m memo.models`
+regenerates the schema.sql artifact from these same Models.
 
-Import rule: the DDL text is stdlib-free, but memo.models.orm pulls
-peewee (hard dep) — db.py already depends on both, so no new cycle.
+Migration note: schema.sql's pre-Peewee text form is gone; the v3 schema
+it describes is equivalent (same tables/columns/CHECKs/DEFAULTs/FTS/
+triggers — index names are now Peewee-generated). v3→v3 upgrades need
+no data migration: migrate() is idempotent (safe create_tables +
+IF NOT EXISTS tail), and old idx_memories_* names stay valid on DBs
+created before the migration.
 """
-from memo.models.memories import MEMORIES_DDL
-from memo.models.meta import META_DDL
-from memo.models.skills import SKILLS_DDL
-
-HEADER: str = ("-- GENERATED from memo.models: do not hand-edit. "
-               "Edit src/memo/models/*.py, then run `python -m memo.models`.")
-
-
-def render_schema() -> str:
-    return HEADER + "\n" + META_DDL + "\n\n" + MEMORIES_DDL + "\n" + SKILLS_DDL + "\n"
-
+from memo.models import orm as orm_models
+from memo.models.orm import (
+    HEADER,
+    CREATE_MODELS,
+    MODELS,
+    RAW_TAIL,
+    ArchivedMemory,
+    Episode,
+    MemoMeta,
+    Memory,
+    MemoryFTS,
+    Skill,
+    database,
+    render_schema,
+    utc_now,
+)
 
 __all__ = [
     "HEADER",
-    "MEMORIES_DDL",
-    "META_DDL",
-    "SKILLS_DDL",
+    "RAW_TAIL",
+    "CREATE_MODELS",
+    "MODELS",
+    "MemoMeta",
+    "Memory",
+    "MemoryFTS",
+    "ArchivedMemory",
+    "Episode",
+    "Skill",
+    "database",
+    "orm_models",
     "render_schema",
+    "utc_now",
 ]

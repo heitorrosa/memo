@@ -1,12 +1,13 @@
-"""Unified memo.db connect + migrate (spec §§5-6), Peewee-backed.
+"""Unified memo.db connect + migrate (spec §§5-6), Peewee-canonical.
 
-SQL text stays byte-identical to memo.models DDL (v1 design: keep the
-strings, move execution onto Peewee). connect() still hands out the
-raw sqlite3 connection (every call site + `with conn:` transaction
-shape untouched) and binds the deferred Peewee database in orm.py to
-the SAME file, so new code can use ORM queries + database.atomic().
-Domain migrations (M-017) run raw SQL as today; playhouse.migrate's
-SqliteMigrator is exposed for future structured ops.
+Models ARE the schema: migrate() drives database.create_tables +
+the RAW_TAIL triggers/clone. No DDL strings exist as source of truth;
+render_schema() (derived from the same Models) serves only the
+schema.sql artifact and the :memory: fallback below.
+Structural alterations go through playhouse.migrate SqliteMigrator ops
+recorded under {domain}_schema_{version} keys — NO alembic, NO SQLAlchemy.
+v3→v3 needs no ops: the Model schema is equivalent to the old text form,
+and migrate is idempotent (safe create + IF NOT EXISTS tail).
 """
 
 from __future__ import annotations
@@ -15,14 +16,15 @@ import sqlite3
 
 from peewee import SqliteDatabase
 
-from memo.models import render_schema
 from memo.models import orm as orm_models
 from memo.models.orm import database as peewee_database
 
 MEMO_SCHEMA_VERSION = 3
 
-# (domain, version, sql): a migration touches ONLY its own domain's tables (M-017).
-MIGRATIONS: list[tuple[str, int, str]] = []
+# (domain, version, op): op(migrator) applies structural alterations via
+# playhouse.migrate (recorded under f"{domain}_schema_{version}"). Empty:
+# v3 needs no alterations (M-017 slot kept for future domains).
+MIGRATIONS: list = []
 
 HAS_VEC = False
 try:
@@ -32,7 +34,6 @@ try:
 except ImportError:
     HAS_VEC = False
 
-SCHEMA_TEXT = render_schema()
 SEED_META = (
     ("schema_version", "3"),
     ("memory_schema_1", "applied"),
@@ -123,24 +124,51 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> int:
-    # raw: DDL application incl. FTS5 virtual table + triggers + CHECKs —
-    # ORM create_tables cannot express those; Models own all CRUD instead.
+    # raw: DDL application — tables via create_tables, triggers/clone via
+    # RAW_TAIL (ORM-inexpressible); the :memory: branch has no shared file
+    # so it applies the same Models-derived text on conn itself.
+    try:
+        path = conn.execute("PRAGMA database_list").fetchone()[2]
+    except Exception:
+        path = ""
+    if path:
+        peewee_db = orm_db(conn)
+        with peewee_db.bind_ctx(orm_models.CREATE_MODELS):
+            peewee_db.create_tables(orm_models.CREATE_MODELS, safe=True)
+    else:
+        from memo.models import render_schema as _render
+
+        with conn:
+            conn.executescript(_render())
+            return _seed(conn)
     with conn:
-        conn.executescript(SCHEMA_TEXT)
-        for key, value in SEED_META:
-            conn.execute(
-                "INSERT INTO memo_meta(k,v) VALUES(?,?) "
-                "ON CONFLICT(k) DO NOTHING",
-                (key, value),
-            )
-        for domain, version, sql in MIGRATIONS:
+        conn.executescript(orm_models.RAW_TAIL)
+        return _seed(conn)
+
+
+def _seed(conn: sqlite3.Connection) -> int:
+    for key, value in SEED_META:
+        conn.execute(
+            "INSERT INTO memo_meta(k,v) VALUES(?,?) "
+            "ON CONFLICT(k) DO NOTHING",
+            (key, value),
+        )
+    if MIGRATIONS:
+        from playhouse.migrate import SqliteMigrator
+
+        try:
+            path = conn.execute("PRAGMA database_list").fetchone()[2]
+        except Exception:
+            path = ""
+        migrator = SqliteMigrator(orm_db(conn) if path else peewee_database)
+        for domain, version, op in MIGRATIONS:
             key = f"{domain}_schema_{version}"
             if not conn.execute(
                 "SELECT 1 FROM memo_meta WHERE k=?", (key,)
             ).fetchone():
-                conn.executescript(sql)
+                op(migrator)
                 conn.execute(
                     "INSERT INTO memo_meta(k,v) VALUES(?,'applied')", (key,)
                 )
-        conn.execute("UPDATE memo_meta SET v='3' WHERE k='schema_version'")
+    conn.execute("UPDATE memo_meta SET v='3' WHERE k='schema_version'")
     return MEMO_SCHEMA_VERSION

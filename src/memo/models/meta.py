@@ -1,8 +1,23 @@
-"""memo_meta registry table (spec §5). Thin re-export: canonical text lives
-in memo.models.orm (Peewee-canonical); this keeps the models/*.py import
-path stable for render_schema()."""
+"""memo_meta registry table (spec §5).
+
+Canonical per-table Model module (Peewee-canonical): this class owns the
+memo_meta schema. orm.py re-exports this module's name for the stable
+memo.models.orm import path.
+"""
 from __future__ import annotations
 
-from memo.models.orm import META_DDL
+from peewee import Model, TextField
 
-__all__ = ["META_DDL"]
+from memo.models.orm import database
+
+
+class MemoMeta(Model):
+    key = TextField(column_name="k", primary_key=True)
+    value = TextField(column_name="v")
+
+    class Meta:
+        table_name = "memo_meta"
+        database = database
+
+
+__all__ = ["MemoMeta"]

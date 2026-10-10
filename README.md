@@ -1,6 +1,6 @@
-<p align="center"><img src="assets/memo-raw.png" width="200" alt="memo logo"></p>
-
 # memo
+
+<p align="center"><img src="assets/memo-raw.png" width="200" alt="memo logo"></p>
 
 One durable memory plus reusable skill MCP server for all of your agents.
 
