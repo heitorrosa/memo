@@ -300,6 +300,22 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
     return _sync_files(conn, known, offset, limit)
 
 
+# L4 tail (Task 7, additive §23): janitor at the END of every skill_sync.
+# Logic above untouched; lazy import keeps the skills→memory ban intact.
+_orig_sync = sync
+
+
+def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None,
+         filter: str | None = None, offset: int = 0,
+         limit: int | None = None) -> dict:
+    from memo import maintenance
+
+    out = _orig_sync(conn, harness, known=known, filter=filter,
+                     offset=offset, limit=limit)
+    maintenance.run(conn)
+    return out
+
+
 def _split_frontmatter(text: str) -> tuple[dict | None, str]:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":

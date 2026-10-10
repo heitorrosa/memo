@@ -296,3 +296,22 @@ def remove(conn: sqlite3.Connection, key: str,
         conn.execute("DELETE FROM memories WHERE key=? AND namespace=?",
                      (key, namespace))
     return {"key": key, "action": "deleted"}
+
+
+# L4 tail (Task 7, additive §8.5/§23): maintenance hook. t0 is captured BEFORE
+# the write so the same-call sweep can never take this call's row (M-024).
+# Logic above untouched; mutating receipts gain `archived` (victim key|None).
+_orig_save = save
+
+
+def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
+         namespace: str = "default", valid_from=None) -> dict:
+    from memo import maintenance
+
+    t0 = temporal.now_iso()
+    receipt = _orig_save(conn, key, value, type=type, namespace=namespace,
+                         valid_from=valid_from)
+    maint = maintenance.run(conn, now=t0)
+    if receipt.get("action") in ("created", "updated", "superseded"):
+        receipt["archived"] = maint["evicted"]
+    return receipt

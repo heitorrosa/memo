@@ -7,6 +7,7 @@ call IN here via lazy import, so this module must not import them back).
 from __future__ import annotations
 
 import math
+import os
 import sqlite3
 import sys
 
@@ -166,6 +167,9 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
                 with conn:
                     conn.execute("DELETE FROM skills WHERE name=?", (name,))
 
-    print(f"maint evicted={1 if evicted else 0} archived={len(archived)}"
-          f" rolled={rolled}", file=sys.stderr)
+    # ponytail: silent no-op runs; signal-only log keeps T-1..T-8 replay
+    # readable (500+ saves) while preserving the per-action audit line.
+    if (evicted or archived or rolled) or os.getenv("MEMO_LOG") == "debug":
+        print(f"maint evicted={1 if evicted else 0} archived={len(archived)}"
+              f" rolled={rolled}", file=sys.stderr)
     return {"evicted": evicted, "archived": archived, "rolled_up": rolled}
