@@ -1,1 +1,3 @@
-Session start: call skill_sync(harness:"opencode", known:<local name/hash list>). Apply all file deltas before doing anything else. Before any personal/project answer: memory_search. After learning anything durable: memory_save. After any workflow worth repeating (5+ tool calls or non-obvious fix): skill_put + write the local SKILL.md. Skills/summaries in context are already loaded — do not re-fetch what you hold.
+# memo (opencode) — prose: prompts.json (memo://summary)
+skill_sync(harness:"opencode", known:<local name/hash list>)
+after a workflow worth repeating (5+ tool calls / non-obvious fix): skill_put + write skills/<name>/SKILL.md
