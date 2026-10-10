@@ -1,7 +1,16 @@
-"""Task 6 tests: skill_sync dual-mode + L0 join (spec §§20-21)."""
+"""Task 6 tests: skill_sync dual-mode + L0 join (spec §§20-21).
+
+Routing is by the agent's DECLARED persist verdict, never by name: a non-empty
+capabilities declaration yields a file delta; every other caller (undeclared,
+bare legacy names, unknown) gets the L0 bundle.
+"""
 
 from memo import db, skills
 from memo import prompts as prompt_store
+
+# The declaration is an abstract verdict: any non-empty value means "I can
+# persist". The server never inspects harness or tool names.
+CAN_PERSIST = ["persist"]
 
 
 def _mem(tmp_path):
@@ -14,6 +23,11 @@ def _put(conn, name, body="body", desc=None):
     return skills.put(conn, name, desc or f"{name} does things.", body)
 
 
+def _files(conn, **kw):
+    """Declared-persistence sync: file mode. The harness name is irrelevant."""
+    return skills.sync(conn, "opencode", capabilities=CAN_PERSIST, **kw)
+
+
 def _known(entries):
     return [{"name": n, "hash": h} for n, h in entries]
 
@@ -24,7 +38,7 @@ def test_empty_converges(tmp_path):
     conn = _mem(tmp_path)
     _put(conn, "b-skill", body="# b")
     _put(conn, "a-skill", body="# a")
-    first = skills.sync(conn, "opencode")
+    first = _files(conn)
     assert first["mode"] == "files" and first["total"] == 2
     assert first["offset"] == 0
     assert [w["path"] for w in first["files_to_write"]] == [
@@ -39,10 +53,10 @@ def test_empty_converges(tmp_path):
     known = _known(
         [(w["path"].split("/")[1], w["hash"]) for w in first["files_to_write"]]
     )
-    second = skills.sync(conn, "opencode", known=known)
+    second = _files(conn, known=known)
     assert second["files_to_write"] == [] and second["files_to_delete"] == []
     assert second["total"] == 2
-    third = skills.sync(conn, "opencode", known=known)  # idempotent repeat
+    third = _files(conn, known=known)  # idempotent repeat
     assert third["files_to_write"] == [] and third["files_to_delete"] == []
     conn.close()
 
@@ -51,7 +65,7 @@ def test_stale_hash_rewrites(tmp_path):
     conn = _mem(tmp_path)
     h = _put(conn, "s", body="v1")["hash"]
     _put(conn, "s", body="v2")
-    r = skills.sync(conn, "opencode", known=_known([("s", h)]))
+    r = _files(conn, known=_known([("s", h)]))
     assert [w["path"] for w in r["files_to_write"]] == ["skills/s/SKILL.md"]
     assert r["files_to_write"][0]["content"].endswith("v2")
     conn.close()
@@ -61,14 +75,14 @@ def test_delete_surfaces_once(tmp_path):
     conn = _mem(tmp_path)
     h = _put(conn, "gone")["hash"]
     skills.tombstone(conn, "gone")
-    r = skills.sync(conn, "opencode", known=_known([("gone", h)]))
+    r = _files(conn, known=_known([("gone", h)]))
     assert [d["path"] for d in r["files_to_delete"]] == ["skills/gone/SKILL.md"]
     assert r["files_to_write"] == []
     assert r["total"] == 0  # tombstones are not live skills
-    again = skills.sync(conn, "opencode", known=[])  # client applied the delete
+    again = _files(conn, known=[])  # client applied the delete
     assert again["files_to_delete"] == [] and again["files_to_write"] == []
     # Unknown-to-server names the client lists also surface as deletes.
-    phantom = skills.sync(conn, "opencode", known=_known([("phantom", "0" * 64)]))
+    phantom = _files(conn, known=_known([("phantom", "0" * 64)]))
     assert [d["path"] for d in phantom["files_to_delete"]] == [
         "skills/phantom/SKILL.md"
     ]
@@ -82,7 +96,7 @@ def test_stale_known_resends_delete(tmp_path):
     h = _put(conn, "gone")["hash"]
     skills.tombstone(conn, "gone")
     for _ in range(2):
-        r = skills.sync(conn, "opencode", known=_known([("gone", h)]))
+        r = _files(conn, known=_known([("gone", h)]))
         assert [d["path"] for d in r["files_to_delete"]] == ["skills/gone/SKILL.md"]
         assert r["files_to_write"] == []
     assert skills.get(conn, "gone")["error"] == "not_found"
@@ -93,13 +107,13 @@ def test_pagination_cap(tmp_path):
     conn = _mem(tmp_path)
     for i in range(25):
         _put(conn, f"skill-{i:02d}", body=f"# body {i}\n" + "x" * 100)
-    p1 = skills.sync(conn, "opencode")
+    p1 = _files(conn)
     assert len(p1["files_to_write"]) <= 10
     assert sum(len(w["content"]) for w in p1["files_to_write"]) <= 30 * 1024
     assert p1["total"] == 25
     seen, offset = [], 0
     while True:
-        p = skills.sync(conn, "opencode", offset=offset)
+        p = _files(conn, offset=offset)
         assert len(p["files_to_write"]) <= 10
         if not p["files_to_write"]:
             break
@@ -116,9 +130,9 @@ def test_pagination_oversize_single(tmp_path):
     conn = _mem(tmp_path)
     _put(conn, "big", body="x" * 40000)
     _put(conn, "small", body="y")
-    p1 = skills.sync(conn, "opencode")
+    p1 = _files(conn)
     assert [w["path"] for w in p1["files_to_write"]] == ["skills/big/SKILL.md"]
-    p2 = skills.sync(conn, "opencode", offset=1)
+    p2 = _files(conn, offset=1)
     assert [w["path"] for w in p2["files_to_write"]] == ["skills/small/SKILL.md"]
     assert p2["total"] == 2
     conn.close()
@@ -176,54 +190,72 @@ def test_l0_name_asc(tmp_path):
     conn.close()
 
 
-def test_unknown_no_caps_defaults_bundle(tmp_path):
-    # Unknown bare harness is NOT an error: it gets the bundle by default.
+def test_undeclared_bundle_by_default(tmp_path):
+    # Undeclared call (any name, legacy or unknown) is NOT an error: bundle.
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
-    b = skills.sync(conn, "carrier-pigeon")
-    assert b["mode"] == "bundle" and b["total"] == 1
-    assert "qol-deploy" in b["bootstrap_md"]
+    for name in ("carrier-pigeon", "opencode", "web"):
+        b = skills.sync(conn, name)
+        assert b["mode"] == "bundle" and b["total"] == 1, name
+    assert "qol-deploy" in skills.sync(conn, "carrier-pigeon")["bootstrap_md"]
     conn.close()
 
 
-def test_capable_web_gets_deltas(tmp_path):
-    # Capability beats name: a web harness that can persist skills gets a delta.
+def test_declared_persist_gets_deltas(tmp_path):
+    # The declaration decides, not the harness name: any non-empty declaration
+    # (whatever its labels) yields a file delta.
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
-    r = skills.sync(conn, "web", capabilities=["file_write"])
-    assert r["mode"] == "files" and r["total"] == 1
+    for name in ("opencode", "web", "some-future-harness"):
+        r = skills.sync(conn, name, capabilities=["opaque-label"])
+        assert r["mode"] == "files" and r["total"] == 1, name
+    r = skills.sync(conn, "opencode", capabilities=CAN_PERSIST)
     assert [w["path"] for w in r["files_to_write"]] == [
         "skills/qol-deploy/SKILL.md"
     ]
-    assert skills.sync(conn, "web", capabilities=["skill_create"])["mode"] == "files"
     conn.close()
 
 
-def test_incapable_file_gets_bundle(tmp_path):
-    # A file-name harness declaring no persistence capability gets a bundle.
+def test_empty_declaration_gets_bundle(tmp_path):
+    # An empty declaration (None or []) declares no persistence -> bundle.
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
-    b = skills.sync(conn, "opencode", capabilities=["sandbox_only"])
-    assert b["mode"] == "bundle" and "qol-deploy" in b["bootstrap_md"]
     assert skills.sync(conn, "opencode", capabilities=[])["mode"] == "bundle"
+    assert skills.sync(conn, "opencode", capabilities=None)["mode"] == "bundle"
     conn.close()
 
 
-def test_legacy_names_unchanged(tmp_path):
-    # Bare legacy names keep their historical mode when capabilities is omitted.
+def test_bare_legacy_names_no_longer_route(tmp_path):
+    # Regression pin: bare names that once meant "files" now mean nothing.
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
-    for name in ("opencode", "claude-code", "filesystem"):
-        assert skills.sync(conn, name)["mode"] == "files"
-    assert skills.sync(conn, "web")["mode"] == "bundle"
+    for name in ("opencode", "claude-code", "filesystem", "web"):
+        assert skills.sync(conn, name)["mode"] == "bundle", name
     conn.close()
 
 
-def test_unknown_with_caps_gets_deltas(tmp_path):
+def test_harness_names_never_influence_routing(tmp_path):
+    # Harness names that once routed (opencode/claude-code/filesystem) or never
+    # did (aliens) are treated identically: the declaration governs, not the name.
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
-    r = skills.sync(conn, "some-future-harness", capabilities=["file_write"])
-    assert r["mode"] == "files"
+    for alien in ("totally-alien", "claude-code", "filesystem", "opencode", "web"):
+        assert skills.sync(conn, alien)["mode"] == "bundle", alien
+        assert skills.sync(conn, alien,
+                           capabilities=CAN_PERSIST)["mode"] == "files", alien
+    conn.close()
+
+
+def test_capability_labels_are_never_matched(tmp_path):
+    # Capability labels are opaque: tool names and junk alike flip the mode only
+    # by being present, never by their value. Only emptiness decides.
+    conn = _mem(tmp_path)
+    _put(conn, "qol-deploy", desc="Ship the Vite app.")
+    for label in ("skill_create", "file_write", "SKILL_CREATE", "whatever",
+                  "persist"):
+        assert skills.sync(conn, "any-name",
+                           capabilities=[label])["mode"] == "files", label
+    assert skills.sync(conn, "any-name", capabilities=[])["mode"] == "bundle"
     conn.close()
 
 
@@ -244,10 +276,9 @@ def test_sync_prompt_teaches_self_evaluation():
         "skill-create or file-write tool",
         "materialized a skill file before",
         "sandbox-only with no persistence",
-        "declare the file capabilities (skill_create, file_write)",
-        "receive a file delta",
+        "declare that you can persist and receive a file delta",
         "declare that you have no persistence and receive the L0 index bundle",
-        "FALLBACKS for undeclared calls",
+        "NEVER matches harness or tool names",
         "apply deletes THEN writes",
         "the database row remains truth",
         "re-calls sync with a filter",
@@ -255,13 +286,13 @@ def test_sync_prompt_teaches_self_evaluation():
         assert needle in text, f"missing self-evaluation instruction: {needle!r}"
 
 
-def test_sync_prompt_keeps_fallback_and_shape():
-    # Legacy hints and the unknown-no-caps default stay stated as server
-    # fallback, and the receipt shapes (mode/fields/offset) are unchanged.
+def test_sync_prompt_names_no_longer_route():
+    # The migration note states names no longer route; the receipt shapes
+    # (mode/fields/offset) are unchanged.
     text = prompt_store.render("tool_skill_sync")
-    assert "opencode, claude-code, filesystem" in text  # legacy hint
-    assert "web -> bundle" in text
-    assert "unknown-no-caps -> bundle" in text
+    assert "opencode, claude-code, filesystem" in text  # migration note
+    assert "no longer route" in text
+    assert "declaration" in text and "skill_create, file_write" not in text
     assert "files_to_write (path, content, hash)" in text
     assert "files_to_delete (path)" in text
     assert "offset, total" in text

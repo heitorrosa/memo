@@ -71,7 +71,8 @@ export async function onSessionStart({ skillsDir, memoryPath, userPath } = {}) {
     const [sum, sync] = await Promise.all([
       rpc("resources/read", { uri: "memo://summary" }),
       rpc("tools/call", { name: "skill_sync",
-        arguments: { harness: "opencode", known: await localKnown(dir) } }),
+        arguments: { harness: "opencode", capabilities: ["persist"],
+          known: await localKnown(dir) } }),
     ]);
     const delta = JSON.parse(sync.result.content[0].text);
     for (const f of delta.files_to_delete ?? [])

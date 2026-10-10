@@ -19,7 +19,6 @@ from memo.skills.crud import (
 )
 from memo.skills.install import default_fetch, install, split_frontmatter
 from memo.skills.sync import (
-    FILE_HARNESSES,
     ORIENTATION,
     PAGE_BYTES,
     PAGE_SIZE,
@@ -34,7 +33,6 @@ from memo.skills.sync import (
 )
 
 __all__ = [
-    "FILE_HARNESSES",
     "ORIENTATION",
     "PAGE_BYTES",
     "PAGE_SIZE",

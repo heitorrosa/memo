@@ -9,6 +9,9 @@ import pytest
 
 from memo import db, embeddings, memory, server, skills, summary
 
+# Non-empty persist declaration -> file delta; names never matched server-side.
+CAN_PERSIST = ["persist"]
+
 
 def _mem(tmp_path, name="memo.db"):
     conn = db.connect(str(tmp_path / name))
@@ -70,11 +73,11 @@ def test_cold_session_injects(tmp_path):
     assert "Top memories (5)" in text
     assert "qol-deploy" in text and "pytest-fast" in text
     assert "Stats: 5/250 memories · 2 skills · db v3" in text
-    d1 = skills.sync(conn, "opencode")
+    d1 = skills.sync(conn, "opencode", capabilities=CAN_PERSIST)
     assert d1["mode"] == "files" and len(d1["files_to_write"]) == 2
     known = [{"name": w["path"].split("/")[1], "hash": w["hash"]}
              for w in d1["files_to_write"]]
-    d2 = skills.sync(conn, "opencode", known=known)
+    d2 = skills.sync(conn, "opencode", capabilities=CAN_PERSIST, known=known)
     assert d2["files_to_write"] == [] and d2["files_to_delete"] == []
     conn.close()
 
@@ -89,7 +92,7 @@ def test_skill_end_to_end(tmp_path):
     r2 = skills.put(conn, "qol-deploy", "Ship the Vite app: build, preview-check, publish.",
                     "# QoL deploy\nrun build, preview, publish.")
     assert r2 == r
-    d = skills.sync(conn, "opencode")
+    d = skills.sync(conn, "opencode", capabilities=CAN_PERSIST)
     assert [w["path"] for w in d["files_to_write"]] == ["skills/qol-deploy/SKILL.md"]
     body = skills.get(conn, "qol-deploy")["body"]
     assert "preview" in body
@@ -113,7 +116,7 @@ def test_single_truth_direction(tmp_path):
     conn = _mem(tmp_path)
     skills.put(conn, "qol-deploy", "Ship desc.", "canonical row body v1")
     stale_known = [{"name": "qol-deploy", "hash": "0" * 64}]
-    d = skills.sync(conn, "opencode", known=stale_known)
+    d = skills.sync(conn, "opencode", capabilities=CAN_PERSIST, known=stale_known)
     assert len(d["files_to_write"]) == 1
     assert "canonical row body v1" in d["files_to_write"][0]["content"]
     assert skills.get(conn, "qol-deploy")["body"] == "canonical row body v1"
@@ -148,7 +151,8 @@ def test_http_skill_sync_roundtrip(tmp_path):
             async with ClientSession(rd, wr) as sess:
                 await sess.initialize()
                 return await sess.call_tool(
-                    "skill_sync", {"harness": "opencode"})
+                    "skill_sync", {"harness": "opencode",
+                                   "capabilities": CAN_PERSIST})
 
     srv, th = _serve(dbp, 18091)
     try:
