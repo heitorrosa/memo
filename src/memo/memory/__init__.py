@@ -5,11 +5,9 @@ NO cap logic here (L4 wires maintenance tails into save).
 """
 from memo.memory.common import (
     ACK_PHRASES,
-    ARCHIVE_COLUMNS,
     BETA,
     DURABLE_NOUN_PATTERN,
     FUZZ_HIT,
-    MEMORY_COLUMNS,
     R_FLOOR,
     SHELL_EXIT_PATTERN,
     STABILITY,
@@ -25,11 +23,9 @@ from memo.memory.search import search
 
 __all__ = [
     "ACK_PHRASES",
-    "ARCHIVE_COLUMNS",
     "BETA",
     "DURABLE_NOUN_PATTERN",
     "FUZZ_HIT",
-    "MEMORY_COLUMNS",
     "R_FLOOR",
     "SHELL_EXIT_PATTERN",
     "STABILITY",

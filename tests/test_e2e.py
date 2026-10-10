@@ -9,8 +9,6 @@ import pytest
 
 from memo import db, embeddings, memory, server, skills, summary
 
-MISSING = object()
-
 
 def _mem(tmp_path, name="memo.db"):
     conn = db.connect(str(tmp_path / name))

@@ -4,7 +4,6 @@ TDD RED: maintenance.py / server.py do not exist yet.
 """
 import datetime
 import math
-import os
 
 import pytest
 
@@ -88,7 +87,7 @@ def _fill_250(conn):
 # --- cap & eviction (§16) ---
 
 def test_251st_evicts_one(tmp_path):
-    from memo import maintenance, memory
+    from memo import memory
     conn = _mem(tmp_path)
     _fill_250(conn)
     expected = _expected_victim(conn)

@@ -27,15 +27,6 @@ GRACE_DAYS = 1.0
 CRON_SCORE, CRON_USES, CRON_AGE = 0.1, 0, 90.0
 ROLLUP_AGE, TOMBSTONE_AGE = 30.0, 30.0
 
-ARCHIVE_COLUMNS = ("key,namespace,value,type,embedding,stability,score,uses,"
-              "created_at,updated_at,valid_from,valid_to,status,family_id,"
-              "superseded_by,relation_type")
-
-_MEMORY_FIELDS = ("key", "namespace", "value", "type", "embedding",
-                  "stability", "score", "uses", "created_at", "updated_at",
-                  "valid_from", "valid_to", "status", "family_id",
-                  "superseded_by", "relation_type")
-
 
 def age_days(created_at: str, now) -> float | None:
     try:

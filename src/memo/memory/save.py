@@ -146,9 +146,6 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
 # BEFORE the write so the same-call sweep can never take this call's row
 # (M-024). Logic above untouched; mutating receipts gain `archived`
 # (victim key|None).
-save = original_save
-
-
 def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",  # noqa: F811 — tail wraps the ladder above
          namespace: str = "default", valid_from=None) -> dict:
     call_start = temporal.now_iso()

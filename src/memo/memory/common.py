@@ -7,12 +7,10 @@ from __future__ import annotations
 
 import math
 import re
-import sqlite3
 
 from peewee import SQL
 
 from memo import db as memo_db
-from memo import embeddings, temporal
 from memo.models.orm import Memory as OrmMemory
 from memo.models.orm import MemoryFTS
 
@@ -34,13 +32,6 @@ DURABLE_NOUN_PATTERN = re.compile(
     r"decid|believe|live[sd]? in|work[sd]? (?:at|on|in)|allergic|goal",
     re.I)
 SHELL_EXIT_PATTERN = re.compile(r"exit(?:\s*code)?\s*[:=]?\s*\d+", re.I)
-
-MEMORY_COLUMNS = ("key value type embedding stability score uses created_at updated_at "
-         "valid_from valid_to status family_id superseded_by relation_type".split())
-
-ARCHIVE_COLUMNS = ("key,namespace,value,type,embedding,stability,score,uses,"
-              "created_at,updated_at,valid_from,valid_to,status,family_id,"
-              "superseded_by,relation_type")
 
 
 def fetch_row(conn, key, namespace):

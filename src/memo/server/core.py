@@ -21,7 +21,7 @@ from memo.server.operations import (
     do_skill_sync,
     do_skill_update,
 )
-from memo.server.shared import resolve_domains, startup_line
+from memo.server.shared import resolve_domains
 
 
 def server_connect(path: str) -> sqlite3.Connection:

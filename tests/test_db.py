@@ -1,7 +1,5 @@
 """Task 1 tests: unified memo.db schema + migrations + FTS triggers (spec §§5-6)."""
 
-import sqlite3
-
 from memo import db
 
 
