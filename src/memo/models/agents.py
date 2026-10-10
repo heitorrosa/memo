@@ -60,6 +60,3 @@ class AgentState(Model):
         table_name = "agent_state"
         database = database
         primary_key = CompositeKey("agent", "skill")
-
-
-__all__ = ["Agent", "AgentState", "STALE_AGENT_DAYS"]

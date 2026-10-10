@@ -14,7 +14,7 @@ import sqlite3
 import sys
 
 
-def _counts(conn: sqlite3.Connection) -> dict:
+def counts(conn: sqlite3.Connection) -> dict:
     out = {}
     for t in ("memories", "archived_memories", "episodes", "skills"):
         try:
@@ -36,15 +36,15 @@ def main(argv: list[str] | None = None) -> int:
 
     tgt = db.connect(args.memo_db)
     db.migrate(tgt)
-    have = _counts(tgt)
+    have = counts(tgt)
     if any(have.values()):
         print("migrate_v2: target already populated — refusing", file=sys.stderr)
         return 2
     mem = sqlite3.connect(args.memory_db)
     skl = sqlite3.connect(args.skills_db)
     try:
-        src_counts = {**{f"mem.{k}": v for k, v in _counts(mem).items()},
-                      **{f"skl.{k}": v for k, v in _counts(skl).items()}}
+        src_counts = {**{f"mem.{k}": v for k, v in counts(mem).items()},
+                      **{f"skl.{k}": v for k, v in counts(skl).items()}}
         if args.dry_run:
             for k, v in src_counts.items():
                 print(f"{k}={v}")

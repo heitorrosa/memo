@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from memo.prompts import PROMPTS, render
 
-_ORDER = ("memory_search", "memory_save", "skill_sync", "memory_delete",
+ORDER = ("memory_search", "memory_save", "skill_sync", "memory_delete",
           "skill_get", "skill_put", "skill_update", "skill_install",
           "bootstrap")
 
@@ -19,7 +19,7 @@ def load_descriptions() -> dict:
     sees clean receipt shapes like ``{key, action}`` instead of the raw
     ``{{key, action}}`` stored in prompts.json.
     """
-    return {name: render(f"tool_{name}") for name in _ORDER}
+    return {name: render(f"tool_{name}") for name in ORDER}
 
 
 DESCRIPTIONS = load_descriptions()

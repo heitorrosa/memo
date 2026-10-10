@@ -7,20 +7,20 @@ from memo.skills.crud import get, l0_index, put, tombstone, update
 from memo.skills.install import install
 
 
-def _mem(tmp_path):
+def mem(tmp_path):
     conn = db.connect(str(tmp_path / "memo.db"))
     assert db.migrate(conn) == 3
     return conn
 
 
-def _sha(s):
+def sha(s):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
 def test_put_get_roundtrip(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     r = put(conn, "qol-deploy", "Ship the Vite app.", "# QoL deploy\nsteps")
-    assert r == {"hash": _sha("# QoL deploy\nsteps"), "version": 1}
+    assert r == {"hash": sha("# QoL deploy\nsteps"), "version": 1}
     g = get(conn, "qol-deploy")
     assert (g["name"], g["description"], g["body"], g["version"]) == (
         "qol-deploy",
@@ -33,7 +33,7 @@ def test_put_get_roundtrip(tmp_path):
 
 
 def test_put_idempotent(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     a = put(conn, "s", "d", "same body")
     b = put(conn, "s", "d", "same body")
     assert b == a  # identical body: no version bump (misunderstanding #8)
@@ -42,19 +42,19 @@ def test_put_idempotent(tmp_path):
 
 
 def test_put_bumps(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     put(conn, "s", "d", "v1")
     r = put(conn, "s", "d", "v2")
-    assert r["version"] == 2 and r["hash"] == _sha("v2")
+    assert r["version"] == 2 and r["hash"] == sha("v2")
     assert get(conn, "s")["body"] == "v2"
     conn.close()
 
 
 def test_update_appends_revision(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     put(conn, "s", "d", "base body")
     r = update(conn, "s", "prefer pnpm over npm")
-    assert r["version"] == 2 and r["hash"] == _sha(get(conn, "s")["body"])
+    assert r["version"] == 2 and r["hash"] == sha(get(conn, "s")["body"])
     body = get(conn, "s")["body"]
     assert body.startswith("base body")  # history never rewritten
     assert "## Revision v2" in body and "prefer pnpm over npm" in body
@@ -66,7 +66,7 @@ def test_update_appends_revision(tmp_path):
 
 
 def test_get_miss(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     assert get(conn, "nope")["error"] == "not_found"
     conn.close()
 
@@ -74,7 +74,7 @@ def test_get_miss(tmp_path):
 def test_concurrent_loser_preserved(tmp_path):
     # M-019: two writers on the same base version -> last wins, loser kept
     # as an appended `## Revision vN (superseded, ...)` section, never lost.
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     put(conn, "s", "d", "v1")
     a = put(conn, "s", "d", "A-body", base_version=1)
     assert a["version"] == 2
@@ -87,7 +87,7 @@ def test_concurrent_loser_preserved(tmp_path):
 
 
 def test_tombstone(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     put(conn, "s", "d", "body")
     t = tombstone(conn, "s")
     assert t["source"] == "tombstone"
@@ -112,7 +112,7 @@ SKILL_MD = (
 
 
 def test_install_validates_frontmatter(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     seen = {}
 
     def fetch(url):
@@ -120,7 +120,7 @@ def test_install_validates_frontmatter(tmp_path):
         return SKILL_MD
 
     r = install(conn, "github:acme/dotfiles", "pytest-fast", fetch=fetch)
-    assert r["version"] == 1 and r["hash"] == _sha(
+    assert r["version"] == 1 and r["hash"] == sha(
         "# pytest-fast\nrun pytest -x -q"
     )
     assert "pytest-fast" in seen["url"]
@@ -155,7 +155,7 @@ def test_install_validates_frontmatter(tmp_path):
 
 def test_install_fetch_404(tmp_path):
     # F-04: fetch failure -> isError, no row, no delta.
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
 
     def fetch(url):
         raise RuntimeError("fetch failed: HTTP 404 for " + url)

@@ -18,6 +18,3 @@ class MemoMeta(Model):
     class Meta:
         table_name = "memo_meta"
         database = database
-
-
-__all__ = ["MemoMeta"]

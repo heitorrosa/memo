@@ -41,6 +41,3 @@ class Skill(Model):
     class Meta:
         table_name = "skills"
         database = database
-
-
-__all__ = ["Skill", "utc_now"]

@@ -12,14 +12,14 @@ from memo import db, embeddings
 MISSING = object()
 
 
-def _mem(tmp_path):
+def mem(tmp_path):
     conn = db.connect(str(tmp_path / "memo.db"))
     assert db.migrate(conn) == 3
     return conn
 
 
 @pytest.fixture(autouse=True)
-def _fallback():
+def fallback():
     embeddings.force_fallback = True
     try:
         yield
@@ -27,15 +27,15 @@ def _fallback():
         embeddings.force_fallback = False
 
 
-def _ts(days_ago):
+def ts(days_ago):
     return (datetime.datetime.now(datetime.timezone.utc)
             - datetime.timedelta(days=days_ago)).isoformat()
 
 
-def _insert(conn, key, *, typ="context", ns="default", age_days=10.0,
+def insert(conn, key, *, typ="context", ns="default", age_days=10.0,
             uses=0, score=1.0, status="current", value=None):
     emb = embeddings.embed([(value or f"durable project fact {key}")])[0]
-    ts = _ts(age_days)
+    stamp = ts(age_days)
     with conn:
         conn.execute(
             "INSERT INTO memories(key,namespace,value,type,embedding,stability,"
@@ -44,17 +44,17 @@ def _insert(conn, key, *, typ="context", ns="default", age_days=10.0,
             (key, ns, value or f"durable project fact {key} for the deploy pipeline",
              typ, emb, {"preference": 14.0, "feedback": 10.0,
                         "analysis": 7.0, "context": 3.0}[typ],
-             score, uses, ts, ts, ts, status, f"fam-{key}"))
+             score, uses, stamp, stamp, stamp, status, f"fam-{key}"))
     return key
 
 
-def _count(conn, ns="default", status="current"):
+def count(conn, ns="default", status="current"):
     return conn.execute(
         "SELECT COUNT(*) FROM memories WHERE namespace=? AND status=?",
         (ns, status)).fetchone()[0]
 
 
-def _expected_victim(conn, ns="default"):
+def expected_victim(conn, ns="default"):
     """Independent argmin E over current rows (reimplements §16 from raw SQL)."""
     now = datetime.datetime.now(datetime.timezone.utc)
     best, best_e = MISSING, None
@@ -72,30 +72,30 @@ def _expected_victim(conn, ns="default"):
     return best
 
 
-def _fill_250(conn):
+def fill_250(conn):
     # 249 ordinary rows + 1 crafted minimal-E victim (a preference: M-016
     # lets the CAP move prefs even though the cron may not).
     for i in range(249):
-        _insert(conn, f"fillrow{i:03d}", age_days=2.0 + (i % 25),
-                uses=1 + (i % 6))
-    _insert(conn, "old.deploy.cmd", typ="preference", age_days=120.0,
-            uses=1, score=1.0,
-            value="durable project fact: the legacy deploy command lives in ops docs")
-    assert _count(conn) == 250
+        insert(conn, f"fillrow{i:03d}", age_days=2.0 + (i % 25),
+               uses=1 + (i % 6))
+    insert(conn, "old.deploy.cmd", typ="preference", age_days=120.0,
+           uses=1, score=1.0,
+           value="durable project fact: the legacy deploy command lives in ops docs")
+    assert count(conn) == 250
 
 
 # --- cap & eviction (§16) ---
 
 def test_251st_evicts_one(tmp_path):
     from memo.memory.save import save
-    conn = _mem(tmp_path)
-    _fill_250(conn)
-    expected = _expected_victim(conn)
+    conn = mem(tmp_path)
+    fill_250(conn)
+    expected = expected_victim(conn)
     assert expected == "old.deploy.cmd"
     r = save(conn, "zebrafinch", "durable project fact: the team writes Python services with uv")
     assert r["action"] == "created"
     assert r["archived"] == expected  # F-07: names the victim
-    assert _count(conn) == 250
+    assert count(conn) == 250
     assert conn.execute(
         "SELECT archived_reason FROM archived_memories WHERE key=?",
         (expected,)).fetchone()[0] == "cap_eviction"
@@ -106,8 +106,8 @@ def test_251st_evicts_one(tmp_path):
 
 def test_burst_grace(tmp_path):
     from memo.memory.save import save
-    conn = _mem(tmp_path)
-    _fill_250(conn)
+    conn = mem(tmp_path)
+    fill_250(conn)
     fresh = ["zebrafinch", "quixotic", "wamblegronk", "xyloid", "kryften",
              "vexillary", "plumbus", "zorgblatt", "quandle", "fimble"]
     for k in fresh:
@@ -130,28 +130,28 @@ def test_burst_grace(tmp_path):
 
 def test_superseded_excluded_from_cap(tmp_path):
     from memo.memory.save import save
-    conn = _mem(tmp_path)
-    _fill_250(conn)
+    conn = mem(tmp_path)
+    fill_250(conn)
     for i in range(5):  # history rows: must not count, must not move (M-006)
-        _insert(conn, f"hist.old.{i}", status="superseded", age_days=50.0, uses=1)
+        insert(conn, f"hist.old.{i}", status="superseded", age_days=50.0, uses=1)
     r = save(conn, "zebrafinch", "durable project fact: the team writes Python services with uv")
     assert r["action"] == "created"
-    assert _count(conn) == 250
-    assert _count(conn, status="superseded") == 5
+    assert count(conn) == 250
+    assert count(conn, status="superseded") == 5
     conn.close()
 
 
 def test_eviction_bounded(tmp_path):
     from memo import maintenance
-    conn = _mem(tmp_path)
-    _fill_250(conn)
+    conn = mem(tmp_path)
+    fill_250(conn)
     for i in range(3):
-        _insert(conn, f"over{i}", age_days=20.0, uses=1)
+        insert(conn, f"over{i}", age_days=20.0, uses=1)
     out = maintenance.run(conn, max_moves=2)
     assert len(out["archived"]) == 2
-    assert _count(conn) == 251  # 253 - 2: converges over calls, idempotent
+    assert count(conn) == 251  # 253 - 2: converges over calls, idempotent
     out2 = maintenance.run(conn)
-    assert _count(conn) == 250 and out2["evicted"] is not None
+    assert count(conn) == 250 and out2["evicted"] is not None
     conn.close()
 
 
@@ -159,9 +159,9 @@ def test_eviction_bounded(tmp_path):
 
 def test_cron_triple_and(tmp_path):
     from memo import maintenance
-    conn = _mem(tmp_path)
-    _insert(conn, "cron.due", typ="analysis", age_days=100.0, uses=0, score=0.05,
-            value="durable analysis conclusion from the old review cycle")
+    conn = mem(tmp_path)
+    insert(conn, "cron.due", typ="analysis", age_days=100.0, uses=0, score=0.05,
+           value="durable analysis conclusion from the old review cycle")
     out = maintenance.run(conn)
     assert "cron.due" in out["archived"]
     assert conn.execute(
@@ -177,11 +177,11 @@ def test_cron_triple_and(tmp_path):
 ])
 def test_cron_vetoes(tmp_path, kw):
     from memo import maintenance
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     base = {"typ": "analysis", "age_days": 100.0, "uses": 0, "score": 0.05,
             "value": "durable analysis conclusion from the old review cycle"}
     base.update(kw)
-    _insert(conn, "cron.safe", **base)
+    insert(conn, "cron.safe", **base)
     out = maintenance.run(conn)
     assert "cron.safe" not in out["archived"]
     assert conn.execute(
@@ -191,23 +191,23 @@ def test_cron_vetoes(tmp_path, kw):
 
 def test_pref_cron_exempt(tmp_path):
     from memo import maintenance
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     for typ in ("preference", "feedback"):
-        _insert(conn, f"keep.{typ}", typ=typ, age_days=100.0, uses=0,
-                score=0.05, value=f"durable {typ} fact kept forever by policy")
+        insert(conn, f"keep.{typ}", typ=typ, age_days=100.0, uses=0,
+               score=0.05, value=f"durable {typ} fact kept forever by policy")
     out = maintenance.run(conn)
     assert out["archived"] == [] and out["evicted"] is None
-    assert _count(conn) == 2  # M-016: only cap eviction may move these
+    assert count(conn) == 2  # M-016: only cap eviction may move these
     conn.close()
 
 
 def test_context_rollup(tmp_path):
     from memo import maintenance
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     for i in range(3):
-        _insert(conn, f"ctx.old.{i}", typ="context", age_days=40.0,
-                uses=1, score=1.0,
-                value=f"durable context note number {i} about the deploy pipeline")
+        insert(conn, f"ctx.old.{i}", typ="context", age_days=40.0,
+               uses=1, score=1.0,
+               value=f"durable context note number {i} about the deploy pipeline")
     out = maintenance.run(conn)
     assert out["rolled_up"] == 1
     ep = conn.execute(
@@ -216,7 +216,7 @@ def test_context_rollup(tmp_path):
     assert ep[1] == 3
     assert ep[0].startswith("auto-rollup of 3 context rows: ")
     assert ep[2] and ep[3] and ep[4] and ep[3] <= ep[4]
-    assert _count(conn) == 0  # N rows out, 1 episode elsewhere: N-1 slots back
+    assert count(conn) == 0  # N rows out, 1 episode elsewhere: N-1 slots back
     for i in range(3):
         assert conn.execute(
             "SELECT archived_reason FROM archived_memories WHERE key=?",
@@ -227,12 +227,12 @@ def test_context_rollup(tmp_path):
 def test_tombstone_expiry(tmp_path):
     from memo import maintenance
     from memo.skills.crud import put, tombstone
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     put(conn, "dead.skill", "old workflow", "body")
     tombstone(conn, "dead.skill")
     with conn:
         conn.execute("UPDATE skills SET updated_at=? WHERE name='dead.skill'",
-                     (_ts(31.0),))
+                     (ts(31.0),))
     put(conn, "fresh.skill", "new workflow", "body")
     tombstone(conn, "fresh.skill")
     out = maintenance.run(conn)
@@ -246,7 +246,7 @@ def test_tombstone_expiry(tmp_path):
 
 def test_save_then_sweep_guard(tmp_path):
     from memo.memory.save import save
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     # A row saved this call is never swept by the same call's tail (M-024).
     r = save(conn, "fresh.note", "durable project fact: just learned this minute")
     assert r["action"] == "created"
@@ -266,7 +266,7 @@ def test_envelopes(tmp_path):
         do_skill_install,
         do_skill_sync,
     )
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     assert do_memory_search(conn, "   ")["error"] == "empty_query"
     assert do_memory_delete(conn, "ghost") == {
         "key": "ghost", "action": "not_found"}  # success-shaped, NOT error
@@ -285,7 +285,7 @@ def test_envelopes(tmp_path):
 
 def test_disable_flags(tmp_path, monkeypatch):
     from memo.server.core import build_server
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     monkeypatch.setenv("MEMO_DISABLE_MEMORY", "1")
     s = build_server(str(tmp_path / "memo.db"))
     import asyncio
@@ -319,7 +319,7 @@ def test_startup_line():
 def test_vec_fallback(tmp_path):
     from memo.memory.save import save
     from memo.memory.search import search
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     save(conn, "editor.indent", "prefers tabs for the project")
     hits = search(conn, "indentation")
     assert hits and hits[0]["key"] == "editor.indent"
@@ -335,7 +335,7 @@ def test_http_no_token_refuses(tmp_path, monkeypatch, capsys):
     assert "MEMO_TOKEN required" in capsys.readouterr().err  # M-033
 
 
-def _serve(db_path, port, token="t"):
+def serve(db_path, port, token="t"):
     import threading
     import time
     import httpx
@@ -359,7 +359,7 @@ def _serve(db_path, port, token="t"):
 
 def test_health(tmp_path):
     import httpx
-    srv, th = _serve(str(tmp_path / "m.db"), 18081)
+    srv, th = serve(str(tmp_path / "m.db"), 18081)
     try:
         r = httpx.get("http://127.0.0.1:18081/health", timeout=5.0)
         assert r.status_code == 200  # no auth on health
@@ -371,7 +371,7 @@ def test_health(tmp_path):
 
 def test_http_auth_reject(tmp_path):
     import httpx
-    srv, th = _serve(str(tmp_path / "m.db"), 18082)
+    srv, th = serve(str(tmp_path / "m.db"), 18082)
     try:
         base = "http://127.0.0.1:18082/mcp"
         assert httpx.post(base, json={}, timeout=5.0).status_code == 401
@@ -400,7 +400,7 @@ def test_http_tool_parity(tmp_path, capsys):
                 await sess.initialize()
                 tools = await sess.list_tools()
                 return sorted(t.name for t in tools.tools)
-    srv, th = _serve(dbp, 18083)
+    srv, th = serve(dbp, 18083)
     try:
         assert asyncio.run(_names()) == dumped  # same tools, either transport
     finally:

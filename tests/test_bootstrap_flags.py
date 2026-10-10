@@ -9,7 +9,7 @@ from memo import db, prompts as prompt_store, summary
 from memo.server.bootstrap import bootstrap_text as server_bootstrap_text
 
 
-def _mem(tmp_path):
+def mem(tmp_path):
     conn = db.connect(str(tmp_path / "memo.db"))
     assert db.migrate(conn) == 3
     return conn
@@ -17,7 +17,7 @@ def _mem(tmp_path):
 
 def test_flag_off_bootstrap_never_raises(tmp_path):
     """Each flag off (and both off) renders DISABLED markers, no AttributeError."""
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     both_off = server_bootstrap_text(conn, memory_on=False, skills_on=False)
     assert "memories DISABLED" in both_off and "skills DISABLED" in both_off
     assert prompt_store.render("orientation") in both_off
@@ -35,7 +35,7 @@ def test_flag_off_bootstrap_never_raises(tmp_path):
 
 def test_web_paste_fallback_is_live(tmp_path):
     """26.3 fallback appears in the memo://summary (bootstrap) output."""
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     fallback = prompt_store.render("web_paste_fallback")
     assert "skills below are pasted" in fallback
     assert "Quote the skill name when using one." in fallback

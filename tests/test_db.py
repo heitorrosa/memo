@@ -3,14 +3,14 @@
 from memo import db
 
 
-def _mem(tmp_path):
+def mem(tmp_path):
     conn = db.connect(str(tmp_path / "memo.db"))
     assert db.migrate(conn) == 3
     return conn
 
 
 def test_unified_schema(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     tables = {
         r[0]
         for r in conn.execute(
@@ -59,7 +59,7 @@ def test_unified_schema(tmp_path):
 
 
 def test_fts_triggers(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     conn.execute(
         "INSERT INTO memories(key,value,type,embedding,stability,created_at,"
         "updated_at,valid_from,family_id) VALUES"

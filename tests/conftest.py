@@ -7,7 +7,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _peewee_close():
+def peewee_close():
     yield
     try:
         from memo import db as memo_db

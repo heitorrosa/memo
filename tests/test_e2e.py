@@ -19,14 +19,14 @@ from memo.skills.sync import sync
 CAN_PERSIST = ["persist"]
 
 
-def _mem(tmp_path, name="memo.db"):
+def mem(tmp_path, name="memo.db"):
     conn = db.connect(str(tmp_path / name))
     assert db.migrate(conn) == 3
     return conn
 
 
 @pytest.fixture(autouse=True)
-def _fallback():
+def fallback():
     embeddings.force_fallback = True
     try:
         yield
@@ -34,7 +34,7 @@ def _fallback():
         embeddings.force_fallback = False
 
 
-def _serve(db_path, port, token="t"):
+def serve(db_path, port, token="t"):
     import time
 
     import httpx
@@ -54,7 +54,7 @@ def _serve(db_path, port, token="t"):
     raise RuntimeError("server did not start")
 
 
-def _seed(conn):
+def seed(conn):
     facts = [
         ("editor.indent", "prefers tabs for the project editor"),
         ("project.stack", "Vite React Tailwind with Bun runtime"),
@@ -72,8 +72,8 @@ def _seed(conn):
 
 def test_cold_session_injects(tmp_path):
     """T-1: cold open returns summary with memories + L0 + stats; 2nd sync empty."""
-    conn = _mem(tmp_path)
-    _seed(conn)
+    conn = mem(tmp_path)
+    seed(conn)
     text = summary.bootstrap_text(conn)
     assert "Top memories (5)" in text
     assert "qol-deploy" in text and "pytest-fast" in text
@@ -89,7 +89,7 @@ def test_cold_session_injects(tmp_path):
 
 def test_skill_end_to_end(tmp_path):
     """T-3: put -> delta materializes file -> get returns the runnable body."""
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     r = put(conn, "qol-deploy", "Ship the Vite app: build, preview-check, publish.",
                    "# QoL deploy\nrun build, preview, publish.")
     assert r["version"] == 1
@@ -107,7 +107,7 @@ def test_skill_end_to_end(tmp_path):
 
 
 def test_web_bundle_reflects_skill(tmp_path):
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     put(conn, "enem-grade", "Grade ENEM essays per INEP rubric, 5x200.",
                "# enem grade\nrubric body")
     b = sync(conn, "web")
@@ -118,7 +118,7 @@ def test_web_bundle_reflects_skill(tmp_path):
 
 def test_single_truth_direction(tmp_path):
     """Row beats file, always: stale client content never overwrites the row."""
-    conn = _mem(tmp_path)
+    conn = mem(tmp_path)
     put(conn, "qol-deploy", "Ship desc.", "canonical row body v1")
     stale_known = [{"name": "qol-deploy", "hash": "0" * 64}]
     d = sync(conn, "opencode", capabilities=CAN_PERSIST, known=stale_known)
@@ -132,7 +132,7 @@ def test_session_survives_dead_db(tmp_path, capsys):
     """F-03/M-026: dead container -> warn + stale, session never raises."""
     assert health_probe("http://127.0.0.1:9/health") == 1
     assert "FAIL" in capsys.readouterr().err
-    conn = _mem(tmp_path)  # stale local snapshot still renders
+    conn = mem(tmp_path)  # stale local snapshot still renders
     assert "(none yet)" in summary.bootstrap_text(conn)
     assert main(["--db", str(tmp_path / "m.db"), "--dump-tools"]) == 0
     conn.close()
@@ -145,7 +145,7 @@ def test_http_skill_sync_roundtrip(tmp_path):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
     dbp = str(tmp_path / "m.db")
-    conn = _mem(tmp_path, "m.db")
+    conn = mem(tmp_path, "m.db")
     put(conn, "qol-deploy", "Ship desc.", "body here")
     conn.close()
 
@@ -159,7 +159,7 @@ def test_http_skill_sync_roundtrip(tmp_path):
                     "skill_sync", {"harness": "opencode",
                                    "capabilities": CAN_PERSIST})
 
-    srv, th = _serve(dbp, 18091)
+    srv, th = serve(dbp, 18091)
     try:
         res = asyncio.run(_sync())
         assert "qol-deploy" in res.content[0].text

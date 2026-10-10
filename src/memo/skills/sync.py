@@ -37,13 +37,13 @@ def live_rows(conn: sqlite3.Connection) -> list[tuple]:
                 .order_by(Skill.name.asc())]
 
 
-def _tombstoned(conn: sqlite3.Connection) -> set[str]:
+def tombstoned(conn: sqlite3.Connection) -> set[str]:
     with memo_db.orm_ctx(conn):
         return {skill.name for skill in Skill.select(Skill.name)
                 .where(Skill.source == "tombstone")}
 
 
-def _known_from_state(conn: sqlite3.Connection, agent_id: str) -> list[dict]:
+def known_from_state(conn: sqlite3.Connection, agent_id: str) -> list[dict]:
     """Stored per-skill snapshot -> known[] for id-only callers (no known[])."""
     with memo_db.orm_ctx(conn):
         rows = list(AgentState.select(AgentState.skill, AgentState.hash)
@@ -51,7 +51,7 @@ def _known_from_state(conn: sqlite3.Connection, agent_id: str) -> list[dict]:
     return [{"name": name, "hash": body_hash} for name, body_hash in rows]
 
 
-def _skill_snapshot(conn: sqlite3.Connection) -> dict:
+def skill_snapshot(conn: sqlite3.Connection) -> dict:
     """Every skill row -> {name: {hash, version, updated_at}}.
 
     Live rows store the NORMALIZED body hash — the value sync echoes — so a
@@ -71,7 +71,7 @@ def _skill_snapshot(conn: sqlite3.Connection) -> dict:
     return snapshot
 
 
-def _moved(prev_last_seen: str | None, updated_at: str) -> bool:
+def moved(prev_last_seen: str | None, updated_at: str) -> bool:
     """Server-computed nudge: skill touched after the agent's previous sync."""
     if prev_last_seen is None:
         return False
@@ -81,7 +81,7 @@ def _moved(prev_last_seen: str | None, updated_at: str) -> bool:
         return False
 
 
-def _resolve_agent(conn: sqlite3.Connection, agent_id, harness: str,
+def resolve_agent(conn: sqlite3.Connection, agent_id, harness: str,
                    caps, now_iso: str) -> tuple[str, str | None]:
     """(agent_id, prev_last_seen): touch a known id, mint on absent/unknown.
 
@@ -106,7 +106,7 @@ def _resolve_agent(conn: sqlite3.Connection, agent_id, harness: str,
         return new_id, None
 
 
-def _persist_snapshot(conn: sqlite3.Connection, agent_id: str,
+def persist_snapshot(conn: sqlite3.Connection, agent_id: str,
                       snapshot: dict, now_iso: str) -> None:
     """Replace the agent's stored per-skill snapshot (hash+version)."""
     rows = [{"agent": agent_id, "skill": name, "hash": entry["hash"],
@@ -119,7 +119,7 @@ def _persist_snapshot(conn: sqlite3.Connection, agent_id: str,
             AgentState.insert_many(rows).execute()
 
 
-def _prune_stale_agents(conn: sqlite3.Connection, now_iso: str) -> None:
+def prune_stale_agents(conn: sqlite3.Connection, now_iso: str) -> None:
     """Lazy staleness sweep on any sync: drop agents (and their state) whose
     last_seen is older than STALE_AGENT_DAYS."""
     cutoff = (temporal.parse_ts(now_iso)
@@ -138,8 +138,8 @@ def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
                 offset: int, limit: int | None) -> dict:
     live = live_rows(conn)
     by_name = {name: (description, body, body_hash, version) for name, description, body, body_hash, version in live}
-    tombstoned = _tombstoned(conn)
-    all_names = set(by_name) | tombstoned
+    tombstoned_names = tombstoned(conn)
+    all_names = set(by_name) | tombstoned_names
     if known is None:
         writes = [
             {"path": f"skills/{name}/SKILL.md",
@@ -167,7 +167,7 @@ def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
         # delete surfaces once; a stale known re-gets it (F-12), never the body.
         deletes = [
             {"path": f"skills/{name}/SKILL.md"}
-            for name in sorted(have) if name in tombstoned or name not in all_names
+            for name in sorted(have) if name in tombstoned_names or name not in all_names
         ]
     total = len(live)
     offset = max(0, offset)
@@ -243,25 +243,25 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
             "err_unknown_harness", harness=harness))
     caps = capabilities if isinstance(capabilities, (list, tuple, set)) else ()
     now_iso = utc_now()
-    _prune_stale_agents(conn, now_iso)
-    resolved_id, prev_last_seen = _resolve_agent(conn, agent_id, harness, caps,
-                                                 now_iso)
+    prune_stale_agents(conn, now_iso)
+    resolved_id, prev_last_seen = resolve_agent(conn, agent_id, harness, caps,
+                                                now_iso)
     if known is None and prev_last_seen is not None:
-        known = _known_from_state(conn, resolved_id)
+        known = known_from_state(conn, resolved_id)
     if caps:  # any declared persist verdict -> files delta; names never matched
         out = sync_files(conn, known, offset, limit)
     else:
         out = sync_web(conn, filter, offset, limit)
-    snapshot = _skill_snapshot(conn)
+    snapshot = skill_snapshot(conn)
     if prev_last_seen is not None:
-        moved = sorted(name for name, entry in snapshot.items()
-                       if _moved(prev_last_seen, entry["updated_at"]))
+        moved_names = sorted(name for name, entry in snapshot.items()
+                             if moved(prev_last_seen, entry["updated_at"]))
         for entry in out.get("files_to_write", []) + out.get("files_to_delete", []):
-            if entry["path"].split("/")[1] in moved:
+            if entry["path"].split("/")[1] in moved_names:
                 entry["moved_since_last_sync"] = True
-        out["moved_since_last_sync"] = moved
+        out["moved_since_last_sync"] = moved_names
     out["agent_id"] = resolved_id
-    _persist_snapshot(conn, resolved_id, snapshot, now_iso)
+    persist_snapshot(conn, resolved_id, snapshot, now_iso)
     return out
 
 

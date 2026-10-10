@@ -24,7 +24,7 @@ from memo.models.orm import database as peewee_database
 MEMO_SCHEMA_VERSION = 3
 
 
-def _create_agents(migrator) -> None:
+def create_agents(migrator) -> None:
     """Create the agents/agent_state tables through the migrator's database.
 
     playhouse.migrate has no CREATE TABLE op, so the structural change runs
@@ -38,7 +38,7 @@ def _create_agents(migrator) -> None:
 
 # (domain, version, op): op(migrator) applies structural alterations via
 # playhouse.migrate (recorded under f"{domain}_schema_{version}").
-MIGRATIONS: list = [("agents", 1, _create_agents)]
+MIGRATIONS: list = [("agents", 1, create_agents)]
 
 HAS_VEC = False
 try:
@@ -150,13 +150,13 @@ def migrate(conn: sqlite3.Connection) -> int:
     else:
         with conn:
             conn.executescript(_render())
-            return _seed(conn)
+            return seed(conn)
     with conn:
         conn.executescript(orm_models.RAW_TAIL)
-        return _seed(conn)
+        return seed(conn)
 
 
-def _seed(conn: sqlite3.Connection) -> int:
+def seed(conn: sqlite3.Connection) -> int:
     for key, value in SEED_META:
         conn.execute(
             "INSERT INTO memo_meta(k,v) VALUES(?,?) "
