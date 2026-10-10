@@ -14,5 +14,5 @@ RUN pip install --no-cache-dir . fastembed uvicorn \
 
 VOLUME /data
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -m memo.server --health http://127.0.0.1:8000/healthz || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -m memo.server --health http://127.0.0.1:8000/health || exit 1
 CMD ["memo", "--db", "/data/memo.db", "--http", "--port", "8000"]

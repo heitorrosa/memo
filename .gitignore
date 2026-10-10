@@ -1,0 +1,6 @@
+# Python bytecode + caches (never committed; local-only)
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage

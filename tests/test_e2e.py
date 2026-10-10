@@ -40,7 +40,7 @@ def _serve(db_path, port, token="t"):
     th.start()
     for _ in range(100):
         try:
-            if httpx.get(f"http://127.0.0.1:{port}/healthz",
+            if httpx.get(f"http://127.0.0.1:{port}/health",
                          timeout=1.0).status_code == 200:
                 return srv, th
         except Exception:
@@ -124,7 +124,7 @@ def test_single_truth_direction(tmp_path):
 
 def test_session_survives_dead_db(tmp_path, capsys):
     """F-03/M-026: dead container -> warn + stale, session never raises."""
-    assert server.health_probe("http://127.0.0.1:9/healthz") == 1
+    assert server.health_probe("http://127.0.0.1:9/health") == 1
     assert "FAIL" in capsys.readouterr().err
     conn = _mem(tmp_path)  # stale local snapshot still renders
     assert "(none yet)" in summary.bootstrap_text(conn)

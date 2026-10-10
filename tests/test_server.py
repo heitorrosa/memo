@@ -318,7 +318,7 @@ def test_vec_fallback(tmp_path):
     conn.close()
 
 
-# --- HTTP: token gate, auth, parity, healthz ---
+# --- HTTP: token gate, auth, parity, health ---
 
 def test_http_no_token_refuses(tmp_path, monkeypatch, capsys):
     from memo import server
@@ -340,7 +340,7 @@ def _serve(db_path, port, token="t"):
     th.start()
     for _ in range(100):
         try:
-            if httpx.get(f"http://127.0.0.1:{port}/healthz",
+            if httpx.get(f"http://127.0.0.1:{port}/health",
                          timeout=1.0).status_code == 200:
                 return srv, th
         except Exception:
@@ -348,12 +348,12 @@ def _serve(db_path, port, token="t"):
     raise RuntimeError("server did not start")
 
 
-def test_healthz(tmp_path):
+def test_health(tmp_path):
     import httpx
     srv, th = _serve(str(tmp_path / "m.db"), 18081)
     try:
-        r = httpx.get("http://127.0.0.1:18081/healthz", timeout=5.0)
-        assert r.status_code == 200  # no auth on healthz
+        r = httpx.get("http://127.0.0.1:18081/health", timeout=5.0)
+        assert r.status_code == 200  # no auth on health
         assert r.json() == {"ok": True, "version": 3, "vec": "bruteforce"}
     finally:
         srv.should_exit = True
