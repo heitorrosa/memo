@@ -127,6 +127,9 @@ function frontmatterVersion(text) {
 // Durable drift state, written BESIDE the skills dir (never inside it, so it
 // can never collide with a skill name or a sync delta). Read only on
 // sync/drift-check; no timers, no background polling (M-030 preserved).
+// Also carries the server-minted agent_id: stored from every sync response and
+// presented on every subsequent skill_sync (absent on first run -> omitted, the
+// server mints; a re-mint overwrites — the old id is dead by definition).
 const SNAPSHOT_NAME = ".memo-sync.json";
 const snapshotPath = (skillsDir) => path.join(path.dirname(skillsDir), SNAPSHOT_NAME);
 
@@ -136,7 +139,7 @@ async function readSnapshot(skillsDir) {
     if (snap && typeof snap === "object" && snap.skills
         && typeof snap.skills === "object") return snap;
   } catch { /* missing/corrupt: treat as empty, the next sync rebuilds it */ }
-  return { version: 1, synced_at: null, skills: {} };
+  return { version: 1, synced_at: null, agent_id: null, skills: {} };
 }
 
 // Local skill dirs -> { name: {hash, version} } via the canonical recipe.
@@ -193,8 +196,10 @@ export async function driftNudge(skillsDir) {
 }
 
 // Post-apply snapshot: server-provided hash where a write just landed, the
-// local recipe hash where the file is local-authoritative.
-async function writeSnapshot(skillsDir, delta) {
+// local recipe hash where the file is local-authoritative. The server-minted
+// agent_id is stored too — a fresh id wins, a response without one keeps the
+// prior (so a no-op sync never drops it).
+async function writeSnapshot(skillsDir, delta, prevAgentId) {
   const writes = new Map();
   for (const f of delta.files_to_write ?? []) {
     writes.set(f.path.replace(/^skills\//, "").split("/")[0], f);
@@ -205,7 +210,8 @@ async function writeSnapshot(skillsDir, delta) {
     const w = writes.get(name);
     skills[name] = { hash: w ? w.hash : info.hash, version: info.version };
   }
-  const snap = { version: 1, synced_at: new Date().toISOString(), skills };
+  const snap = { version: 1, synced_at: new Date().toISOString(),
+    agent_id: delta.agent_id ?? prevAgentId ?? null, skills };
   try {
     await fs.writeFile(snapshotPath(skillsDir), JSON.stringify(snap, null, 2), "utf8");
   } catch { /* best-effort: a missing snapshot just re-classifies as untracked */ }
@@ -217,9 +223,11 @@ async function writeSnapshot(skillsDir, delta) {
  *  MCP for local-vs-snapshot), then persists the post-apply snapshot.
  *  Returns {delta, deleted}; `deleted` is the locally-gone tracked names. */
 async function syncApply(dir) {
-  const { known, deleted } = await classifySync(dir, await readSnapshot(dir));
-  const sync = await rpc("tools/call", { name: "skill_sync",
-    arguments: { harness: "opencode", capabilities: ["persist"], known } });
+  const snap = await readSnapshot(dir);
+  const { known, deleted } = await classifySync(dir, snap);
+  const args = { harness: "opencode", capabilities: ["persist"], known };
+  if (snap.agent_id) args.agent_id = snap.agent_id;  // present the stored id
+  const sync = await rpc("tools/call", { name: "skill_sync", arguments: args });
   const delta = JSON.parse(sync.result.content[0].text);
   for (const f of delta.files_to_delete ?? [])
     await fs.rm(path.join(dir, f.path.replace(/^skills\//, "")), { force: true });
@@ -228,7 +236,7 @@ async function syncApply(dir) {
     await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(p, f.content, "utf8");
   }
-  await writeSnapshot(dir, delta);
+  await writeSnapshot(dir, delta, snap.agent_id);
   return { delta, deleted };
 }
 
