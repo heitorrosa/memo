@@ -290,7 +290,7 @@ def test_disable_flags(tmp_path, monkeypatch):
     s = build_server(str(tmp_path / "memo.db"))
     import asyncio
     names = sorted(t.name for t in asyncio.run(s.list_tools()))
-    assert names == ["skill_create", "skill_get", "skill_install", "skill_put",
+    assert names == ["skill_get", "skill_install", "skill_put",
                      "skill_sync", "skill_update"]
     monkeypatch.setenv("MEMO_DISABLE_SKILLS", "yes")
     with pytest.raises(SystemExit) as e:
@@ -304,7 +304,7 @@ def test_dump_tools(tmp_path, capsys):
     assert main(["--db", str(tmp_path / "m.db"), "--dump-tools"]) == 0
     names = capsys.readouterr().out.split()
     assert names == ["memory_delete", "memory_save", "memory_search",
-                     "skill_create", "skill_get", "skill_install", "skill_put",
+                     "skill_get", "skill_install", "skill_put",
                      "skill_sync", "skill_update"]
 
 

@@ -8,8 +8,8 @@ from __future__ import annotations
 from memo.prompts import PROMPTS, render
 
 _ORDER = ("memory_search", "memory_save", "skill_sync", "memory_delete",
-          "skill_get", "skill_put", "skill_create", "skill_update",
-          "skill_install", "bootstrap")
+          "skill_get", "skill_put", "skill_update", "skill_install",
+          "bootstrap")
 
 
 def load_descriptions() -> dict:

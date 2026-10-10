@@ -174,7 +174,7 @@ const _timers = new Map();
  *  evidence that a skill was written, so the push is never speculative. */
 function resolveSkillPath(event, skillsDir) {
   if (typeof event === "string") {
-    return event.includes(`${path.sep}skills${path.sep}`) && event.endsWith("SKILL.md")
+    return event.replace(/\\/g, "/").includes("/skills/") && event.endsWith("SKILL.md")
       ? event : null;
   }
   const tool = event?.tool;
