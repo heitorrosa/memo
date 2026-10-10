@@ -1,3 +1,4 @@
+-- GENERATED from memo.models: do not hand-edit. Edit src/memo/models/*.py, then run `python -m memo.models`.
 CREATE TABLE IF NOT EXISTS memo_meta(
   k TEXT PRIMARY KEY, v TEXT NOT NULL);
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pathlib
 import sqlite3
+
+from memo.models import render_schema
 
 MEMO_SCHEMA_VERSION = 3
 
@@ -18,7 +19,7 @@ try:
 except ImportError:
     HAS_VEC = False
 
-SCHEMA_TEXT = pathlib.Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
+SCHEMA_TEXT = render_schema()
 SEED_META = (
     ("schema_version", "3"),
     ("memory_schema_1", "applied"),
