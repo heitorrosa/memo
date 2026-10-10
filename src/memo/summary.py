@@ -11,6 +11,7 @@ import datetime
 import sqlite3
 
 from memo import skills
+from memo import db as memo_db
 from memo.models.orm import Memory as OrmMemory
 from memo.models.orm import Skill as OrmSkill
 
@@ -28,8 +29,9 @@ def age_days_label(updated_at: str) -> str:
 
 
 def top_memories_lines(conn: sqlite3.Connection, limit: int = 10) -> list[str]:
-    rows = (OrmMemory.select().where(OrmMemory.status == "current")
-            .order_by(OrmMemory.updated_at.desc()).limit(limit))
+    with memo_db.orm_ctx(conn):
+        rows = list((OrmMemory.select().where(OrmMemory.status == "current")
+                     .order_by(OrmMemory.updated_at.desc()).limit(limit)))
     lines = []
     for row in rows:
         shown = row.value if len(row.value) <= 160 else row.value[:160] + "…"
@@ -38,8 +40,9 @@ def top_memories_lines(conn: sqlite3.Connection, limit: int = 10) -> list[str]:
 
 
 def stats_line(conn: sqlite3.Connection) -> str:
-    memory_count = OrmMemory.select().where(OrmMemory.status == "current").count()
-    skill_count = OrmSkill.select().where(OrmSkill.source != "tombstone").count()
+    with memo_db.orm_ctx(conn):
+        memory_count = OrmMemory.select().where(OrmMemory.status == "current").count()
+        skill_count = OrmSkill.select().where(OrmSkill.source != "tombstone").count()
     return f"Stats: {memory_count}/250 memories · {skill_count} skills · db v3"
 
 

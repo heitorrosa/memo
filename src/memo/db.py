@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import sqlite3
 
+from peewee import SqliteDatabase
+
 from memo.models import render_schema
+from memo.models import orm as orm_models
 from memo.models.orm import database as peewee_database
 
 MEMO_SCHEMA_VERSION = 3
@@ -43,6 +46,36 @@ def peewee_init(path: str):
     """Bind the deferred ORM database to path (same file as connect)."""
     peewee_database.init(path, pragmas=PRAGMAS)
     return peewee_database
+
+
+_db_cache: dict[str, SqliteDatabase] = {}
+
+
+def orm_db(conn: sqlite3.Connection) -> SqliteDatabase:
+    """Path-scoped Peewee database for conn's file.
+
+    The deferred global follows the LAST connect() — wrong under
+    simultaneous DBs (replay T-6 opens s2.db, later ORM reads on the
+    first conn would hit s2.db). Resolving via PRAGMA database_list
+    keeps every ORM query on conn's own file; same path shares one
+    cached Database (WAL + busy_timeout make that safe).
+    """
+    try:
+        path = conn.execute("PRAGMA database_list").fetchone()[2]
+    except Exception:
+        return peewee_database
+    if not path:
+        return peewee_database  # :memory: has no shared file; use global
+    cached = _db_cache.get(path)
+    if cached is None:
+        cached = SqliteDatabase(path, pragmas=PRAGMAS)
+        _db_cache[path] = cached
+    return cached
+
+
+def orm_ctx(conn: sqlite3.Connection):
+    """bind_ctx for all ORM models onto conn's database."""
+    return orm_db(conn).bind_ctx(orm_models.MODELS)
 
 
 def atomic():

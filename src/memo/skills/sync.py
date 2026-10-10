@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 
 from memo import errors
+from memo import db as memo_db
 from memo.models.orm import Skill
 from memo.skills.crud import build_frontmatter, l0_line
 
@@ -24,18 +25,23 @@ ORIENTATION = (
 
 
 def live_rows(conn: sqlite3.Connection) -> list[tuple]:
-    return [(skill.name, skill.description, skill.body, skill.skill_hash, skill.version)
-            for skill in Skill.select().where(Skill.source != "tombstone")
-            .order_by(Skill.name.asc())]
+    with memo_db.orm_ctx(conn):
+        return [(skill.name, skill.description, skill.body, skill.skill_hash, skill.version)
+                for skill in Skill.select().where(Skill.source != "tombstone")
+                .order_by(Skill.name.asc())]
+
+
+def _tombstoned(conn: sqlite3.Connection) -> set[str]:
+    with memo_db.orm_ctx(conn):
+        return {skill.name for skill in Skill.select(Skill.name)
+                .where(Skill.source == "tombstone")}
 
 
 def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
                 offset: int, limit: int | None) -> dict:
     live = live_rows(conn)
     by_name = {name: (description, body, body_hash, version) for name, description, body, body_hash, version in live}
-    tombstoned = {
-        skill.name for skill in Skill.select(Skill.name).where(Skill.source == "tombstone")
-    }
+    tombstoned = _tombstoned(conn)
     all_names = set(by_name) | tombstoned
     if known is None:
         writes = [

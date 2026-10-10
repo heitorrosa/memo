@@ -64,14 +64,20 @@ def grow_stability(stability: float, kind: str, age_days: float) -> float:
 
 
 def fts_scores(conn, query: str) -> dict[int, float]:
+    from peewee import SQL
+
+    from memo import db as memo_db
+    from memo.models.orm import MemoryFTS
+
     query_tokens = [token for token in re.findall(r"[A-Za-z0-9_]+", query) if len(token) > 1]
     if not query_tokens:
         return {}
     match = " OR ".join(f'"{token}"' for token in query_tokens[:10])
     try:
-        rows = conn.execute(
-            "SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ?"
-            " ORDER BY rank LIMIT 500", (match,)).fetchall()
+        with memo_db.orm_ctx(conn):
+            rows = list((MemoryFTS.select(MemoryFTS.rowid, MemoryFTS.rank().alias("rank_value"))
+                         .where(MemoryFTS.match(match))
+                         .order_by(SQL("rank_value")).limit(500).tuples()).execute())
     except Exception:
         return {}
     if not rows:

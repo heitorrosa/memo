@@ -12,6 +12,7 @@ import sqlite3
 
 from memo import db as memo_db
 from memo import errors
+from memo.models import orm as orm_models
 from memo.models.orm import Skill
 
 
@@ -53,7 +54,8 @@ def put(conn: sqlite3.Connection, name: str, description: str, body: str,
     """
     now = utc_now()
     body_hash = hash_body(body)
-    with memo_db.atomic():
+    peewee_db = memo_db.orm_db(conn)
+    with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         row = Skill.get_or_none(Skill.name == name)
         if row is None:
             Skill.create(name=name, description=description, body=body,
@@ -107,7 +109,8 @@ def split_revisions(body: str) -> tuple[str, list[str]]:
 def get(conn: sqlite3.Connection, name: str, version: int | None = None) -> dict:
     """Fetch a skill. version pins an old revision (rebuilt from the
     append-only base + revision sections); tombstoned/missing -> not_found."""
-    row = Skill.get_or_none(Skill.name == name)
+    with memo_db.orm_ctx(conn):
+        row = Skill.get_or_none(Skill.name == name)
     if row is None or row.source == "tombstone":
         return errors.err("not_found", f"skill {name!r} not found")
     description, body, body_hash, current_version = (
@@ -127,13 +130,15 @@ def get(conn: sqlite3.Connection, name: str, version: int | None = None) -> dict
 
 def update(conn: sqlite3.Connection, name: str, patch: str) -> dict:
     """Append a `## Revision vN (<date>)` section; never rewrites history."""
-    row = Skill.get_or_none(Skill.name == name)
+    peewee_db = memo_db.orm_db(conn)
+    with peewee_db.bind_ctx(orm_models.MODELS):
+        row = Skill.get_or_none(Skill.name == name)
     if row is None or row.source == "tombstone":
         return errors.err("not_found", f"skill {name!r} not found")
     body, version = row.body, row.version
     now, new_version = utc_now(), version + 1
     new_body = f"{body}\n\n## Revision v{new_version} ({now})\n{patch}"
-    with memo_db.atomic():
+    with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         (Skill.update(body=new_body, skill_hash=hash_body(new_body),
                       version=new_version, updated_at=now)
          .where(Skill.name == name).execute())
@@ -143,12 +148,14 @@ def update(conn: sqlite3.Connection, name: str, patch: str) -> dict:
 def tombstone(conn: sqlite3.Connection, name: str) -> dict:
     """Soft-delete: keep the row + body 30d (maintenance drops it), surfaced
     to file harnesses via sync files_to_delete. Idempotent."""
-    row = Skill.get_or_none(Skill.name == name)
+    peewee_db = memo_db.orm_db(conn)
+    with peewee_db.bind_ctx(orm_models.MODELS):
+        row = Skill.get_or_none(Skill.name == name)
     if row is None:
         return errors.err("not_found", f"skill {name!r} not found")
     body_hash, version, source = row.skill_hash, row.version, row.source
     if source != "tombstone":
-        with memo_db.atomic():
+        with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
             (Skill.update(source="tombstone", updated_at=utc_now())
              .where(Skill.name == name).execute())
     return {"name": name, "hash": body_hash, "version": version, "source": "tombstone"}
@@ -156,7 +163,8 @@ def tombstone(conn: sqlite3.Connection, name: str) -> dict:
 
 def l0_index(conn: sqlite3.Connection) -> list[str]:
     """L0 index lines, name asc — never insertion order (M-014)."""
-    rows = (Skill.select(Skill.name, Skill.description)
-            .where(Skill.source != "tombstone")
-            .order_by(Skill.name.asc()).tuples())
+    with memo_db.orm_ctx(conn):
+        rows = list((Skill.select(Skill.name, Skill.description)
+                     .where(Skill.source != "tombstone")
+                     .order_by(Skill.name.asc()).tuples()))
     return [l0_line(name, description) for name, description in rows]
