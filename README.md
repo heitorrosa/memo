@@ -1,10 +1,8 @@
-# memo
-
-<p align="center"><img src="assets/memo-raw.png" width="180" alt="memo logo"></p>
+<p align="center"><img src="assets/memo-text.png" width="180" alt="memo logo"></p>
 
 <p align="center">One durable memory and reusable skills for all your agents.</p>
 
-Memo is an MCP server that gives multiple agents shared memory and reusable workflows. A single Python server owns the SQLite database. File-based harnesses sync `SKILL.md` files, while web harnesses can use a skill index in context.
+memo is an MCP server that gives multiple agents shared memory and reusable workflows. A single Python server owns the SQLite database. File-based harnesses sync `SKILL.md` files, while web harnesses can use a skill index in context.
 
 ## Architecture
 
