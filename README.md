@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/memo-text.png" width="180" alt="memo logo"></p>
+<p align="center"><img src="assets/memo-text.png" width="240" alt="memo logo"></p>
 
 <p align="center">One durable memory and reusable skills for all your agents.</p>
 
