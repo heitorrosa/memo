@@ -15,6 +15,7 @@ from memo.server.operations import (
     do_memory_delete,
     do_memory_save,
     do_memory_search,
+    do_skill_create,
     do_skill_get,
     do_skill_install,
     do_skill_put,
@@ -100,6 +101,11 @@ def build_server(db_path: str, memory_on: bool | None = None,
         def skill_put(name: str, description: str, body: str,
                       source: str = "local") -> dict:
             return do_skill_put(conn, name, description, body, source, lock)
+
+        @server.tool(name="skill_create", description=DESCRIPTIONS["skill_create"])
+        def skill_create(name: str, description: str, body: str,
+                         source: str = "local") -> dict:
+            return do_skill_create(conn, name, description, body, source, lock)
 
         @server.tool(name="skill_update", description=DESCRIPTIONS["skill_update"])
         def skill_update(name: str, patch: str) -> dict:

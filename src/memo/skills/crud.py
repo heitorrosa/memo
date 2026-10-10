@@ -91,6 +91,25 @@ def put(conn: sqlite3.Connection, name: str, description: str, body: str,
         return {"hash": body_hash, "version": new_version}
 
 
+def create(conn: sqlite3.Connection, name: str, description: str, body: str,
+           source: str = "local") -> dict:
+    """Insert-only sibling of put: a NEW name stores exactly like put-for-new
+    (version 1, hash=sha256(body)); an existing name is a conflict and the row
+    is left untouched (hash_mismatch family, spec §7 — reserved code, no new one)."""
+    now = utc_now()
+    body_hash = hash_body(body)
+    peewee_db = memo_db.orm_db(conn)
+    with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
+        row = Skill.get_or_none(Skill.name == name)
+        if row is not None:
+            return errors.err("hash_mismatch", prompt_store.render(
+                "err_skill_exists", name=name, version=row.version))
+        Skill.create(name=name, description=description, body=body,
+                     skill_hash=body_hash, version=1, source=source,
+                     created_at=now, updated_at=now)
+    return {"hash": body_hash, "version": 1}
+
+
 def split_revisions(body: str) -> tuple[str, list[str]]:
     """Split an append-only body into (base, [revision sections])."""
     chunks, current = [], []

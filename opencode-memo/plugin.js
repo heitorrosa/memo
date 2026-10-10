@@ -3,8 +3,7 @@
 // Config (env, with defaults): MEMO_ENDPOINT (default
 // http://localhost:8000/mcp), MEMO_TOKEN (required for --http).
 //
-// Enforcement-only. Three registrations — no background scheduling, no idle
-// flush, no post-tool auto-capture/auto-save (M-030):
+// Four registrations — no background scheduling, no idle flush (M-030):
 //   1. session "context"      — frozen orientation block, byte-stable per
 //                               session, re-pushed on EVERY render so it
 //                               survives compaction; plus any reminder queued by (2)
@@ -12,16 +11,20 @@
 //                               use; queues a reminder when the agent acts
 //                               without them (never blocks, never mutates input)
 //   3. session "compaction"   — carries the memory block through compaction
+//   4. tool "execute.after"   — disk-evident skill push: a **/SKILL.md write or
+//                               a native skill_create/skill_update event pushes
+//                               the skill via skill_put (restored from 216a806)
 import { Plugin } from "@opencode/plugin";
 import {
-  transform, onSessionStart, createGuard, guardBefore, REMIND_PERSIST,
+  transform, onSessionStart, onAfterWrite, createGuard, guardBefore,
+  REMIND_PERSIST,
 } from "./hooks.js";
 
 export const name = "opencode-memo";
 export const version = "3.0.0";
 
 // Named re-exports stay for tests/consumers that import hooks directly.
-export { transform, onSessionStart, guardBefore };
+export { transform, onSessionStart, onAfterWrite, guardBefore };
 
 export const config = {
   endpoint: process.env.MEMO_ENDPOINT ?? "http://localhost:8000/mcp",
@@ -91,6 +94,21 @@ export default Plugin.define({
         };
       } catch {
         // leave event.result unset -> normal model compaction proceeds
+      }
+    });
+
+    // 4. Disk-evident push: after a **/SKILL.md write (write/edit/patch) or a
+    // native skill_create/skill_update event, push the skill via skill_put.
+    // Only deterministic disk evidence triggers it (resolveSkillPath gates the
+    // path); never speculative, never background.
+    await ctx.tool.hook("execute.after", (event) => {
+      if (event.status !== "completed") return;
+      const input = event.input ?? {};
+      if (event.tool === "skill_create" || event.tool === "skill_update") {
+        onAfterWrite({ tool: event.tool, input });
+      } else if (event.tool === "write" || event.tool === "edit" || event.tool === "patch") {
+        const p = input.path ?? input.filePath;
+        if (p) onAfterWrite(String(p));
       }
     });
   },

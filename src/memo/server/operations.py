@@ -12,7 +12,7 @@ from memo.memory.remove import remove
 from memo.memory.save import save
 from memo.memory.search import search
 from memo.server.shared import internal_error, log_operation
-from memo.skills.crud import get, put, update
+from memo.skills.crud import create, get, put, update
 from memo.skills.install import install
 from memo.skills.sync import sync
 
@@ -115,6 +115,16 @@ def do_skill_put(conn, name, description, body, source="local", lock=None):
             with lock:
                 return put(conn, name, description, body, source=source)
         return put(conn, name, description, body, source=source)
+    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+        return internal_error(exc)
+
+
+def do_skill_create(conn, name, description, body, source="local", lock=None):
+    try:
+        if lock is not None:
+            with lock:
+                return create(conn, name, description, body, source=source)
+        return create(conn, name, description, body, source=source)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
         return internal_error(exc)
 

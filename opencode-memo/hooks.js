@@ -1,11 +1,12 @@
 // opencode-memo hooks (Bun, zero deps — fetch + node:crypto are platform).
-// Enforcement-only glue. `transform` is a pure string op (no MCP call);
-// `onSessionStart` does the session-open sync + file materialization over the
-// remote MCP endpoint. The execute.before guard + context/compaction hook bodies
-// live in plugin.js.
-// No background scheduling, no idle flush, no post-tool auto-capture/auto-save
-// (M-030). Failures warn + go stale; the session NEVER fails because memory is
-// down (M-026).
+// `transform` is a pure string op (no MCP call); `onSessionStart` does the
+// session-open sync + file materialization over the remote MCP endpoint;
+// `onAfterWrite` pushes a skill back to the server ONLY on deterministic disk
+// evidence (**/SKILL.md path writes + native skill_create/skill_update events:
+// the path IS the provenance). The execute.before guard + context/compaction +
+// execute.after hook bodies live in plugin.js.
+// No background scheduling, no idle flush (M-030). Failures warn + go stale;
+// the session NEVER fails because memory is down (M-026).
 import { createHash, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -125,7 +126,8 @@ export async function onSessionStart({ skillsDir, memoryPath, userPath } = {}) {
 // the suffix so the guard survives a server rename.
 const MEMORY_TOOLS = [
   "memory_search", "memory_save", "memory_delete",
-  "skill_put", "skill_get", "skill_sync", "skill_install", "skill_update",
+  "skill_put", "skill_create", "skill_get", "skill_sync", "skill_install",
+  "skill_update",
 ];
 
 function memoTool(name) {
@@ -162,6 +164,47 @@ export function guardBefore(event, g) {
     g.nudged.add("search");
     g.pending.push(REMIND_SEARCH);
   }
+}
+
+const _timers = new Map();
+
+/** Map either a file-write path (string) or a native skill tool event
+ *  ({tool:"skill_create"|"skill_update", input:{name}}) to a SKILL.md path.
+ *  Restored from 216a806: the path (or the native tool event) IS the disk
+ *  evidence that a skill was written, so the push is never speculative. */
+function resolveSkillPath(event, skillsDir) {
+  if (typeof event === "string") {
+    return event.includes(`${path.sep}skills${path.sep}`) && event.endsWith("SKILL.md")
+      ? event : null;
+  }
+  const tool = event?.tool;
+  if ((tool === "skill_create" || tool === "skill_update") && event?.input?.name) {
+    return path.join(skillsDir ?? defaultSkillsDir(), `${event.input.name}`, "SKILL.md");
+  }
+  return null;
+}
+
+/** After hook: skills/**\/SKILL.md writes AND native skill_create/skill_update
+ *  tool events -> skill_put(source='local-hook'). Debounced 2s per resolved
+ *  path; logs, never throws. Restored from 216a806 (disk-evident push leg). */
+export function onAfterWrite(event, { skillsDir } = {}) {
+  const filePath = resolveSkillPath(event, skillsDir);
+  if (!filePath) return;
+  clearTimeout(_timers.get(filePath));
+  _timers.set(filePath, setTimeout(async () => {
+    try {
+      const text = await fs.readFile(filePath, "utf8");
+      const meta = Object.fromEntries(
+        (text.split("---")[1] ?? "").split("\n").filter((l) => l.includes(":"))
+          .map((l) => { const i = l.indexOf(":"); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
+      const body = text.split(/^---$/m).slice(2).join("---").trimStart();
+      if (!meta.name || !meta.description) return;
+      await rpc("tools/call", { name: "skill_put",
+        arguments: { name: meta.name, description: meta.description, body, source: "local-hook" } });
+    } catch (e) {
+      console.warn(`memo after-write: ${e.message}`);
+    }
+  }, 2000));
 }
 
 // Constant-time local compare helper (re-exported for tests/consumers).
