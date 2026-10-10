@@ -5,7 +5,9 @@ capabilities declaration yields a file delta; every other caller (undeclared,
 bare legacy names, unknown) gets the L0 bundle.
 """
 
-from memo import db, skills
+from memo import db
+from memo.skills.crud import get, l0_index, put, tombstone
+from memo.skills.sync import sync
 from memo import prompts as prompt_store
 
 # The declaration is an abstract verdict: any non-empty value means "I can
@@ -20,12 +22,12 @@ def _mem(tmp_path):
 
 
 def _put(conn, name, body="body", desc=None):
-    return skills.put(conn, name, desc or f"{name} does things.", body)
+    return put(conn, name, desc or f"{name} does things.", body)
 
 
 def _files(conn, **kw):
     """Declared-persistence sync: file mode. The harness name is irrelevant."""
-    return skills.sync(conn, "opencode", capabilities=CAN_PERSIST, **kw)
+    return sync(conn, "opencode", capabilities=CAN_PERSIST, **kw)
 
 
 def _known(entries):
@@ -74,7 +76,7 @@ def test_stale_hash_rewrites(tmp_path):
 def test_delete_surfaces_once(tmp_path):
     conn = _mem(tmp_path)
     h = _put(conn, "gone")["hash"]
-    skills.tombstone(conn, "gone")
+    tombstone(conn, "gone")
     r = _files(conn, known=_known([("gone", h)]))
     assert [d["path"] for d in r["files_to_delete"]] == ["skills/gone/SKILL.md"]
     assert r["files_to_write"] == []
@@ -94,12 +96,12 @@ def test_stale_known_resends_delete(tmp_path):
     # until the tombstone expires; the body is never resurrected.
     conn = _mem(tmp_path)
     h = _put(conn, "gone")["hash"]
-    skills.tombstone(conn, "gone")
+    tombstone(conn, "gone")
     for _ in range(2):
         r = _files(conn, known=_known([("gone", h)]))
         assert [d["path"] for d in r["files_to_delete"]] == ["skills/gone/SKILL.md"]
         assert r["files_to_write"] == []
-    assert skills.get(conn, "gone")["error"] == "not_found"
+    assert get(conn, "gone")["error"] == "not_found"
     conn.close()
 
 
@@ -142,7 +144,7 @@ def test_web_bundle_has_l0(tmp_path):
     conn = _mem(tmp_path)
     for n in ("a-deploy", "b-test", "c-grade"):
         _put(conn, n, desc=f"{n} workflow helper.")
-    b = skills.sync(conn, "web")
+    b = sync(conn, "web")
     assert b["mode"] == "bundle"
     assert b["truncated"] is False and b["total"] == 3
     for n in ("a-deploy", "b-test", "c-grade"):
@@ -157,10 +159,10 @@ def test_web_truncation(tmp_path):
     for i in range(200):
         _put(conn, f"skill-{i:03d}", desc=f"generic helper number {i}.")
     _put(conn, "deploy-ship", desc="Ship the Vite app: build, preview-check, publish.")
-    b = skills.sync(conn, "web")
+    b = sync(conn, "web")
     assert b["truncated"] is True and b["total"] == 201
     assert "skill-000" in b["bootstrap_md"]  # name-asc slice, L0 only
-    f = skills.sync(conn, "web", filter="deploy ship vite")
+    f = sync(conn, "web", filter="deploy ship vite")
     assert "deploy-ship" in f["bootstrap_md"]
     assert "skill-000" not in f["bootstrap_md"]
     conn.close()
@@ -182,7 +184,7 @@ def test_l0_name_asc(tmp_path):
     conn = _mem(tmp_path)
     for n in ("zebra", "apple", "mango"):
         _put(conn, n)
-    assert [l.split("**")[1] for l in skills.l0_index(conn)] == [
+    assert [l.split("**")[1] for l in l0_index(conn)] == [
         "apple",
         "mango",
         "zebra",
@@ -195,9 +197,9 @@ def test_undeclared_bundle_by_default(tmp_path):
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
     for name in ("carrier-pigeon", "opencode", "web"):
-        b = skills.sync(conn, name)
+        b = sync(conn, name)
         assert b["mode"] == "bundle" and b["total"] == 1, name
-    assert "qol-deploy" in skills.sync(conn, "carrier-pigeon")["bootstrap_md"]
+    assert "qol-deploy" in sync(conn, "carrier-pigeon")["bootstrap_md"]
     conn.close()
 
 
@@ -207,9 +209,9 @@ def test_declared_persist_gets_deltas(tmp_path):
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
     for name in ("opencode", "web", "some-future-harness"):
-        r = skills.sync(conn, name, capabilities=["opaque-label"])
+        r = sync(conn, name, capabilities=["opaque-label"])
         assert r["mode"] == "files" and r["total"] == 1, name
-    r = skills.sync(conn, "opencode", capabilities=CAN_PERSIST)
+    r = sync(conn, "opencode", capabilities=CAN_PERSIST)
     assert [w["path"] for w in r["files_to_write"]] == [
         "skills/qol-deploy/SKILL.md"
     ]
@@ -220,8 +222,8 @@ def test_empty_declaration_gets_bundle(tmp_path):
     # An empty declaration (None or []) declares no persistence -> bundle.
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
-    assert skills.sync(conn, "opencode", capabilities=[])["mode"] == "bundle"
-    assert skills.sync(conn, "opencode", capabilities=None)["mode"] == "bundle"
+    assert sync(conn, "opencode", capabilities=[])["mode"] == "bundle"
+    assert sync(conn, "opencode", capabilities=None)["mode"] == "bundle"
     conn.close()
 
 
@@ -230,7 +232,7 @@ def test_bare_legacy_names_no_longer_route(tmp_path):
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
     for name in ("opencode", "claude-code", "filesystem", "web"):
-        assert skills.sync(conn, name)["mode"] == "bundle", name
+        assert sync(conn, name)["mode"] == "bundle", name
     conn.close()
 
 
@@ -240,8 +242,8 @@ def test_harness_names_never_influence_routing(tmp_path):
     conn = _mem(tmp_path)
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
     for alien in ("totally-alien", "claude-code", "filesystem", "opencode", "web"):
-        assert skills.sync(conn, alien)["mode"] == "bundle", alien
-        assert skills.sync(conn, alien,
+        assert sync(conn, alien)["mode"] == "bundle", alien
+        assert sync(conn, alien,
                            capabilities=CAN_PERSIST)["mode"] == "files", alien
     conn.close()
 
@@ -253,16 +255,16 @@ def test_capability_labels_are_never_matched(tmp_path):
     _put(conn, "qol-deploy", desc="Ship the Vite app.")
     for label in ("skill_create", "file_write", "SKILL_CREATE", "whatever",
                   "persist"):
-        assert skills.sync(conn, "any-name",
+        assert sync(conn, "any-name",
                            capabilities=[label])["mode"] == "files", label
-    assert skills.sync(conn, "any-name", capabilities=[])["mode"] == "bundle"
+    assert sync(conn, "any-name", capabilities=[])["mode"] == "bundle"
     conn.close()
 
 
 def test_malformed_harness_not_found(tmp_path):
     conn = _mem(tmp_path)
-    assert skills.sync(conn, "")["error"] == "not_found"
-    assert skills.sync(conn, None)["error"] == "not_found"  # type: ignore[arg-type]
+    assert sync(conn, "")["error"] == "not_found"
+    assert sync(conn, None)["error"] == "not_found"  # type: ignore[arg-type]
     conn.close()
 
 

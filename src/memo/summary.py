@@ -10,11 +10,12 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-from memo import skills
 from memo import db as memo_db
 from memo import prompts as prompt_store
 from memo.models.orm import Memory as OrmMemory
 from memo.models.orm import Skill as OrmSkill
+from memo.skills.crud import l0_index
+from memo.skills.sync import ORIENTATION
 
 def age_days_label(updated_at: str) -> str:
     try:
@@ -50,11 +51,11 @@ def stats_line(conn: sqlite3.Connection) -> str:
 
 def bootstrap_text(conn: sqlite3.Connection) -> str:
     top_memories = top_memories_lines(conn)
-    skill_index = skills.l0_index(conn)
+    skill_index = l0_index(conn)
     parts = [
         prompt_store.render("bootstrap_title"),
         prompt_store.render("heading_orientation"),
-        skills.ORIENTATION,
+        ORIENTATION,
         prompt_store.render("top_memories_heading", count=len(top_memories)),
         *(top_memories or [prompt_store.render("empty_memories")]),
         prompt_store.render("skill_index_heading_full", count=len(skill_index)),

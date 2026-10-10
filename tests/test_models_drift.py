@@ -3,7 +3,7 @@ plus ORM models match the migrated schema (peewee lane)."""
 import pathlib
 
 import memo.models
-from memo.models import render_schema
+from memo.models.orm import render_schema
 
 
 def test_committed_schema_matches_generated():

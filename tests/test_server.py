@@ -87,12 +87,12 @@ def _fill_250(conn):
 # --- cap & eviction (§16) ---
 
 def test_251st_evicts_one(tmp_path):
-    from memo import memory
+    from memo.memory.save import save
     conn = _mem(tmp_path)
     _fill_250(conn)
     expected = _expected_victim(conn)
     assert expected == "old.deploy.cmd"
-    r = memory.save(conn, "zebrafinch", "durable project fact: the team writes Python services with uv")
+    r = save(conn, "zebrafinch", "durable project fact: the team writes Python services with uv")
     assert r["action"] == "created"
     assert r["archived"] == expected  # F-07: names the victim
     assert _count(conn) == 250
@@ -105,13 +105,13 @@ def test_251st_evicts_one(tmp_path):
 
 
 def test_burst_grace(tmp_path):
-    from memo import memory
+    from memo.memory.save import save
     conn = _mem(tmp_path)
     _fill_250(conn)
     fresh = ["zebrafinch", "quixotic", "wamblegronk", "xyloid", "kryften",
              "vexillary", "plumbus", "zorgblatt", "quandle", "fimble"]
     for k in fresh:
-        r = memory.save(conn, k, f"durable project fact about {k} for the deploy pipeline")
+        r = save(conn, k, f"durable project fact about {k} for the deploy pipeline")
         assert r["action"] == "created", k
     for k in fresh:  # T-4: newest 10 all present
         assert conn.execute(
@@ -129,12 +129,12 @@ def test_burst_grace(tmp_path):
 
 
 def test_superseded_excluded_from_cap(tmp_path):
-    from memo import memory
+    from memo.memory.save import save
     conn = _mem(tmp_path)
     _fill_250(conn)
     for i in range(5):  # history rows: must not count, must not move (M-006)
         _insert(conn, f"hist.old.{i}", status="superseded", age_days=50.0, uses=1)
-    r = memory.save(conn, "zebrafinch", "durable project fact: the team writes Python services with uv")
+    r = save(conn, "zebrafinch", "durable project fact: the team writes Python services with uv")
     assert r["action"] == "created"
     assert _count(conn) == 250
     assert _count(conn, status="superseded") == 5
@@ -225,15 +225,16 @@ def test_context_rollup(tmp_path):
 
 
 def test_tombstone_expiry(tmp_path):
-    from memo import maintenance, skills
+    from memo import maintenance
+    from memo.skills.crud import put, tombstone
     conn = _mem(tmp_path)
-    skills.put(conn, "dead.skill", "old workflow", "body")
-    skills.tombstone(conn, "dead.skill")
+    put(conn, "dead.skill", "old workflow", "body")
+    tombstone(conn, "dead.skill")
     with conn:
         conn.execute("UPDATE skills SET updated_at=? WHERE name='dead.skill'",
                      (_ts(31.0),))
-    skills.put(conn, "fresh.skill", "new workflow", "body")
-    skills.tombstone(conn, "fresh.skill")
+    put(conn, "fresh.skill", "new workflow", "body")
+    tombstone(conn, "fresh.skill")
     out = maintenance.run(conn)
     assert conn.execute(
         "SELECT 1 FROM skills WHERE name='dead.skill'").fetchone() is None
@@ -244,10 +245,10 @@ def test_tombstone_expiry(tmp_path):
 
 
 def test_save_then_sweep_guard(tmp_path):
-    from memo import memory
+    from memo.memory.save import save
     conn = _mem(tmp_path)
     # A row saved this call is never swept by the same call's tail (M-024).
-    r = memory.save(conn, "fresh.note", "durable project fact: just learned this minute")
+    r = save(conn, "fresh.note", "durable project fact: just learned this minute")
     assert r["action"] == "created"
     assert conn.execute(
         "SELECT 1 FROM memories WHERE key='fresh.note'").fetchone()
@@ -257,43 +258,50 @@ def test_save_then_sweep_guard(tmp_path):
 # --- envelopes (§7): every tool error case returns, never raises ---
 
 def test_envelopes(tmp_path):
-    from memo import server
+    from memo.server.operations import (
+        do_memory_delete,
+        do_memory_save,
+        do_memory_search,
+        do_skill_get,
+        do_skill_install,
+        do_skill_sync,
+    )
     conn = _mem(tmp_path)
-    assert server.do_memory_search(conn, "   ")["error"] == "empty_query"
-    assert server.do_memory_delete(conn, "ghost") == {
+    assert do_memory_search(conn, "   ")["error"] == "empty_query"
+    assert do_memory_delete(conn, "ghost") == {
         "key": "ghost", "action": "not_found"}  # success-shaped, NOT error
-    assert server.do_skill_get(conn, "nope")["error"] == "not_found"
-    assert server.do_skill_sync(conn, "")["error"] == "not_found"
-    assert server.do_skill_install(conn, "bitbucket:x", "s")["error"] == "not_found"
-    bad = server.do_skill_install(
+    assert do_skill_get(conn, "nope")["error"] == "not_found"
+    assert do_skill_sync(conn, "")["error"] == "not_found"
+    assert do_skill_install(conn, "bitbucket:x", "s")["error"] == "not_found"
+    bad = do_skill_install(
         conn, "github:o/r", "s", fetch=lambda url: (_ for _ in ()).throw(
             RuntimeError("fetch failed: HTTP 404 for x")))
     assert bad == {"error": "internal", "detail": "fetch failed: HTTP 404 for x"}
-    assert server.do_memory_save(conn, "k", "durable value here", typ="nonsense")["error"] == "internal"
+    assert do_memory_save(conn, "k", "durable value here", typ="nonsense")["error"] == "internal"
     conn.close()
 
 
 # --- disable flags, dump-tools, startup line, vec fallback ---
 
 def test_disable_flags(tmp_path, monkeypatch):
-    from memo import server
+    from memo.server.core import build_server
     conn = _mem(tmp_path)
     monkeypatch.setenv("MEMO_DISABLE_MEMORY", "1")
-    s = server.build_server(str(tmp_path / "memo.db"))
+    s = build_server(str(tmp_path / "memo.db"))
     import asyncio
     names = sorted(t.name for t in asyncio.run(s.list_tools()))
     assert names == ["skill_get", "skill_install", "skill_put",
                      "skill_sync", "skill_update"]
     monkeypatch.setenv("MEMO_DISABLE_SKILLS", "yes")
     with pytest.raises(SystemExit) as e:
-        server.build_server(str(tmp_path / "memo.db"))
+        build_server(str(tmp_path / "memo.db"))
     assert e.value.code == 2  # F-13: no domains enabled
     conn.close()
 
 
 def test_dump_tools(tmp_path, capsys):
-    from memo import server
-    assert server.main(["--db", str(tmp_path / "m.db"), "--dump-tools"]) == 0
+    from memo.server.cli import main
+    assert main(["--db", str(tmp_path / "m.db"), "--dump-tools"]) == 0
     names = capsys.readouterr().out.split()
     assert names == ["memory_delete", "memory_save", "memory_search",
                      "skill_get", "skill_install", "skill_put",
@@ -301,18 +309,19 @@ def test_dump_tools(tmp_path, capsys):
 
 
 def test_startup_line():
-    from memo import server
-    assert server.startup_line("x.db", True, True, True) == \
+    from memo.server.shared import startup_line
+    assert startup_line("x.db", True, True, True) == \
         "memo v3 db=x.db vec=vec memory=on skills=on"
-    assert server.startup_line("x.db", False, False, True) == \
+    assert startup_line("x.db", False, False, True) == \
         "memo v3 db=x.db vec=bruteforce memory=off skills=on"
 
 
 def test_vec_fallback(tmp_path):
-    from memo import memory  # F-02: numpy path serves full behavior
+    from memo.memory.save import save
+    from memo.memory.search import search
     conn = _mem(tmp_path)
-    memory.save(conn, "editor.indent", "prefers tabs for the project")
-    hits = memory.search(conn, "indentation")
+    save(conn, "editor.indent", "prefers tabs for the project")
+    hits = search(conn, "indentation")
     assert hits and hits[0]["key"] == "editor.indent"
     conn.close()
 
@@ -320,9 +329,9 @@ def test_vec_fallback(tmp_path):
 # --- HTTP: token gate, auth, parity, health ---
 
 def test_http_no_token_refuses(tmp_path, monkeypatch, capsys):
-    from memo import server
+    from memo.server.cli import main_http
     monkeypatch.delenv("MEMO_TOKEN", raising=False)
-    assert server.main_http(["--db", str(tmp_path / "m.db")]) == 2
+    assert main_http(["--db", str(tmp_path / "m.db")]) == 2
     assert "MEMO_TOKEN required" in capsys.readouterr().err  # M-033
 
 
@@ -331,8 +340,9 @@ def _serve(db_path, port, token="t"):
     import time
     import httpx
     import uvicorn
-    from memo import server as S
-    app = S.build_http_app(S.build_server(db_path), token)
+    from memo.server.core import build_server
+    from memo.server.http import build_http_app
+    app = build_http_app(build_server(db_path), token)
     srv = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="error"))
     th = threading.Thread(target=srv.run, daemon=True)
@@ -375,11 +385,11 @@ def test_http_auth_reject(tmp_path):
 
 def test_http_tool_parity(tmp_path, capsys):
     import asyncio
-    from memo import server
+    from memo.server.cli import main
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
     dbp = str(tmp_path / "m.db")
-    assert server.main(["--db", dbp, "--dump-tools"]) == 0
+    assert main(["--db", dbp, "--dump-tools"]) == 0
     dumped = sorted(capsys.readouterr().out.split())
 
     async def _names():

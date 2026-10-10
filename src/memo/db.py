@@ -18,7 +18,7 @@ from peewee import SqliteDatabase
 from playhouse.migrate import SqliteMigrator
 
 from memo.models import orm as orm_models
-from memo.models import render_schema as _render
+from memo.models.orm import render_schema as _render
 from memo.models.orm import database as peewee_database
 
 MEMO_SCHEMA_VERSION = 3

@@ -4,7 +4,8 @@ import warnings
 
 import pytest
 
-from memo import db, embeddings, memory
+from memo import db, embeddings
+from memo.memory.save import save
 
 
 @pytest.fixture(autouse=True)
@@ -36,8 +37,8 @@ def _count(conn):
 def test_exact_update(tmp_path):
     # Same key + new value = UPDATE, never supersede (§8.1).
     conn = _mem(tmp_path)
-    assert memory.save(conn, "editor.indent", "prefers tabs")["action"] == "created"
-    r = memory.save(conn, "editor.indent", "prefers spaces")
+    assert save(conn, "editor.indent", "prefers tabs")["action"] == "created"
+    r = save(conn, "editor.indent", "prefers spaces")
     assert (r["key"], r["action"]) == ("editor.indent", "updated")
     assert _count(conn) == 1
     row = _row(conn, "editor.indent")
@@ -49,8 +50,8 @@ def test_exact_update(tmp_path):
 def test_fuzzy_extends(tmp_path):
     # Similar key, additive info -> merged into old row, one row total.
     conn = _mem(tmp_path)
-    memory.save(conn, "editor.tabs", "prefers tabs")
-    r = memory.save(conn, "editor.tabs.pref", "prefers tabs in editor")
+    save(conn, "editor.tabs", "prefers tabs")
+    r = save(conn, "editor.tabs.pref", "prefers tabs in editor")
     assert r["action"] in ("updated", "created")
     assert _count(conn) == 1
     conn.close()
@@ -59,9 +60,9 @@ def test_fuzzy_extends(tmp_path):
 def test_contradict_supersedes(tmp_path):
     # Contradiction across keys: old superseded, same family, chain linked.
     conn = _mem(tmp_path)
-    memory.save(conn, "editor.indent", "prefers tabs")
+    save(conn, "editor.indent", "prefers tabs")
     old = _row(conn, "editor.indent")
-    r = memory.save(conn, "editor.indent.v2", "prefers spaces instead of tabs")
+    r = save(conn, "editor.indent.v2", "prefers spaces instead of tabs")
     assert r["action"] == "superseded"
     new = _row(conn, "editor.indent.v2")
     assert new is not None and new[2] == "current"
@@ -75,8 +76,8 @@ def test_contradict_supersedes(tmp_path):
 
 def test_unrelated_coexists(tmp_path):
     conn = _mem(tmp_path)
-    memory.save(conn, "ml.frame", "uses PyTorch for ML")
-    r = memory.save(conn, "ml.research", "uses JAX for some research")
+    save(conn, "ml.frame", "uses PyTorch for ML")
+    r = save(conn, "ml.research", "uses JAX for some research")
     assert r["action"] == "created"
     assert _count(conn) == 2
     a = _row(conn, "ml.frame")
@@ -87,8 +88,8 @@ def test_unrelated_coexists(tmp_path):
 
 def test_qualifies_no_status_change(tmp_path):
     conn = _mem(tmp_path)
-    memory.save(conn, "home.city", "lives in Campinas")
-    memory.save(conn, "home.city.scope", "also studies in Sao Paulo")
+    save(conn, "home.city", "lives in Campinas")
+    save(conn, "home.city.scope", "also studies in Sao Paulo")
     old = _row(conn, "home.city")
     assert old[2] == "current"  # no status change on the old row
     conn.close()
@@ -97,8 +98,8 @@ def test_qualifies_no_status_change(tmp_path):
 def test_reasserts_same_row(tmp_path):
     # Time-relative restatement merges: one row, never duplicates (Review Focus).
     conn = _mem(tmp_path)
-    memory.save(conn, "editor.indent", "prefers spaces")
-    r = memory.save(conn, "editor.indent.note", "still prefers spaces as of 2026-10")
+    save(conn, "editor.indent", "prefers spaces")
+    r = save(conn, "editor.indent.note", "still prefers spaces as of 2026-10")
     assert r["action"] in ("updated", "created")
     assert _count(conn) == 1
     conn.close()
@@ -108,7 +109,7 @@ def test_trivia_rejected(tmp_path):
     # Trivia -> SUCCESS shape, do nothing, don't retry (M-#1 / §7).
     conn = _mem(tmp_path)
     for junk in ("ok", "hi", "thanks", "got it", "x"):
-        r = memory.save(conn, f"junk.{junk}", junk)
+        r = save(conn, f"junk.{junk}", junk)
         assert r["action"] == "rejected_trivia", junk
     assert _count(conn) == 0
     conn.close()
@@ -117,8 +118,8 @@ def test_trivia_rejected(tmp_path):
 def test_retry_idempotent(tmp_path):
     # Retry after timeout -> created then updated/merged, never two rows (T-7).
     conn = _mem(tmp_path)
-    assert memory.save(conn, "project.stack", "uses Bun not npm")[ "action"] == "created"
-    assert memory.save(conn, "project.stack", "uses Bun not npm")["action"] == "updated"
+    assert save(conn, "project.stack", "uses Bun not npm")[ "action"] == "created"
+    assert save(conn, "project.stack", "uses Bun not npm")["action"] == "updated"
     assert _count(conn) == 1
     conn.close()
 
@@ -126,7 +127,7 @@ def test_retry_idempotent(tmp_path):
 def test_future_valid_from_kept(tmp_path):
     # Future valid_from MUST NOT be clamped (M-010, T-8).
     conn = _mem(tmp_path)
-    memory.save(conn, "move.date", "moving to SP", valid_from="2027-01-01")
+    save(conn, "move.date", "moving to SP", valid_from="2027-01-01")
     row = _row(conn, "move.date")
     assert row[10].startswith("2027-01-01"), row[10]
     conn.close()
@@ -137,7 +138,7 @@ def test_oversize_accepted(tmp_path):
     conn = _mem(tmp_path)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        r = memory.save(conn, "big.note", "durable project context: " + "x" * 10_000)
+        r = save(conn, "big.note", "durable project context: " + "x" * 10_000)
     assert r["action"] == "created"
     assert any("4KB" in str(w.message) or "large" in str(w.message).lower() for w in caught)
     assert len(_row(conn, "big.note")[1]) > 10_000
