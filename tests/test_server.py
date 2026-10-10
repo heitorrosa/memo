@@ -370,9 +370,10 @@ def test_health(tmp_path):
         th.join(timeout=10)
 
 
-def test_http_unknown_host_rejected(tmp_path):
-    """DNS-rebinding guard: a Host not in the allowlist is refused."""
+def test_http_tightened_host_rejected(tmp_path, monkeypatch):
+    """Tightening path: with MEMO_TRUSTED_HOSTS set, other Hosts are refused."""
     import httpx
+    monkeypatch.setenv("MEMO_TRUSTED_HOSTS", "memo.tunnel.example")
     srv, th = serve(str(tmp_path / "m.db"), 18095)
     try:
         r = httpx.post("http://127.0.0.1:18095/mcp", json=_init_body(),
@@ -403,8 +404,8 @@ def test_http_trusted_host_from_env_passes(tmp_path, monkeypatch):
         th.join(timeout=10)
 
 
-def test_http_default_hosts_unchanged(tmp_path, monkeypatch):
-    """Env unset: localhost still works, non-allowlisted hosts still refused."""
+def test_http_default_hosts_permissive(tmp_path, monkeypatch):
+    """Env unset: every Host passes (token is the boundary); localhost too."""
     import httpx
     monkeypatch.delenv("MEMO_TRUSTED_HOSTS", raising=False)
     srv, th = serve(str(tmp_path / "m.db"), 18097)
@@ -413,11 +414,30 @@ def test_http_default_hosts_unchanged(tmp_path, monkeypatch):
                         headers={**JSON_ONLY, "Authorization": "Bearer t"},
                         timeout=5.0)
         assert ok.status_code == 200, ok.text
-        bad = httpx.post("http://127.0.0.1:18097/mcp", json=_init_body(),
-                         headers={**JSON_ONLY, "Authorization": "Bearer t",
-                                  "Host": "memo.tunnel.example"},
-                         timeout=5.0)
-        assert bad.status_code == 421
+        # A rotating tunnel hostname (unknown to any allowlist) now passes.
+        tunnel = httpx.post("http://127.0.0.1:18097/mcp", json=_init_body(),
+                            headers={**JSON_ONLY, "Authorization": "Bearer t",
+                                     "Host": "random-1234.trycloudflare.com"},
+                            timeout=5.0)
+        assert tunnel.status_code == 200, tunnel.text
+        assert tunnel.json()["result"]["serverInfo"]["name"] == "memo"
+    finally:
+        srv.should_exit = True
+        th.join(timeout=10)
+
+
+def test_http_default_origin_still_gated(tmp_path, monkeypatch):
+    """Host is permissive by default, but a browser Origin is still gated."""
+    import httpx
+    monkeypatch.delenv("MEMO_TRUSTED_HOSTS", raising=False)
+    srv, th = serve(str(tmp_path / "m.db"), 18098)
+    try:
+        r = httpx.post("http://127.0.0.1:18098/mcp", json=_init_body(),
+                       headers={**JSON_ONLY, "Authorization": "Bearer t",
+                                "Origin": "https://evil.example"},
+                       timeout=5.0)
+        assert r.status_code == 403
+        assert "Invalid Origin header" in r.text
     finally:
         srv.should_exit = True
         th.join(timeout=10)

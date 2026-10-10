@@ -7,13 +7,17 @@ import os
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
+import mcp.server.streamable_http as _streamable_http
 import mcp.server.streamable_http_manager as _session_manager
 from mcp.server.streamable_http import (
     CONTENT_TYPE_JSON,
     CONTENT_TYPE_SSE,
     StreamableHTTPServerTransport,
 )
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.server.transport_security import (
+    TransportSecurityMiddleware,
+    TransportSecuritySettings,
+)
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
@@ -121,24 +125,55 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
-# DNS-rebinding allowlist defaults: localhost-only, matching what the MCP SDK
-# auto-enables when FastMCP is constructed with a loopback host. Extra Host
-# values (e.g. a Cloudflare tunnel hostname) are added via MEMO_TRUSTED_HOSTS.
+# DNS-rebinding defence-in-depth for the MCP endpoint. The bearer token is the
+# real boundary: it is mandatory on every /mcp request, compared in constant
+# time, and a 401 is returned before the MCP parser runs (see BearerAuth). The
+# Host/Origin checks only guard that pre-auth parser surface, and a rebound
+# request without the token still 401s. The MCP SDK's Host default is
+# localhost-only (loopback dev default), which false-positives on every tunnel
+# rotation (trycloudflare/funnel hostnames change per restart), so we default
+# to trusting every Host. Origin stays allowlisted: browsers are still
+# origin-gated, while non-browser MCP clients send no Origin and pass --
+# mcp/server/transport_security.py `_validate_origin` returns True when the
+# Origin header is absent. Set MEMO_TRUSTED_HOSTS to tighten (that is the
+# opt-in path): then exactly those hosts (+ localhost) pass.
+_TRUST_ANY_HOST = "*"
 _DEFAULT_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 _DEFAULT_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+
+
+class _TrustedHostMiddleware(TransportSecurityMiddleware):
+    """Host gate that honours the trust-all sentinel, else the allowlist.
+
+    The SDK's Host check has no wildcard, so trusting every host is expressed
+    by the `*` sentinel: present => any non-empty Host passes; absent => the
+    normal exact / `host:*` allowlist applies.
+    """
+
+    def _validate_host(self, host: str | None) -> bool:
+        if _TRUST_ANY_HOST in self.settings.allowed_hosts:
+            return bool(host)
+        return super()._validate_host(host)
 
 
 def _trusted_security() -> TransportSecuritySettings:
     """Transport allowlist for the MCP endpoint.
 
-    MEMO_TRUSTED_HOSTS is a comma-separated list of extra Host header values
-    (tunnel/public hostnames). Each entry is allowed verbatim and with any port
-    (`host:*`), and both http/https Origins are derived so browser clients on
-    the same hostname are not blocked. Unset => localhost defaults only, i.e.
-    the previous behaviour unchanged.
+    Default (MEMO_TRUSTED_HOSTS unset): trust every Host; only Origin is gated,
+    to the localhost defaults. Set MEMO_TRUSTED_HOSTS (comma-separated extra
+    Host header values, e.g. a tunnel/public hostname): exactly those hosts
+    plus localhost pass, each also allowed with any port, with matching
+    http/https Origins derived. Unset is the permissive default because the
+    token -- not the Host header -- is the security boundary.
     """
     extra = [h.strip() for h in os.getenv("MEMO_TRUSTED_HOSTS", "").split(",")
              if h.strip()]
+    if not extra:
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[_TRUST_ANY_HOST],
+            allowed_origins=list(_DEFAULT_ORIGINS),
+        )
     hosts = list(_DEFAULT_HOSTS)
     origins = list(_DEFAULT_ORIGINS)
     for entry in extra:
@@ -163,6 +198,10 @@ def build_http_app(server, token: str):
     # FastMCP builds its StreamableHTTPSessionManager with the module-level
     # transport class; swap in ours so the per-request flag is honoured.
     _session_manager.StreamableHTTPServerTransport = _NegotiatingTransport
+    # That transport's inherited __init__ resolves TransportSecurityMiddleware
+    # from mcp.server.streamable_http; swap in ours so the trust-all sentinel
+    # above is honoured (the SDK's Host check has no wildcard).
+    _streamable_http.TransportSecurityMiddleware = _TrustedHostMiddleware
     # The session manager is created lazily on the next line and reads
     # transport_security from settings at that point, so set it first.
     server.settings.transport_security = _trusted_security()
