@@ -18,8 +18,8 @@ try:
 except ImportError:
     HAS_VEC = False
 
-_SCHEMA = pathlib.Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
-_SEED = (
+SCHEMA_TEXT = pathlib.Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
+SEED_META = (
     ("schema_version", "3"),
     ("memory_schema_1", "applied"),
     ("skills_schema_1", "applied"),
@@ -43,8 +43,8 @@ def connect(path: str) -> sqlite3.Connection:
 
 def migrate(conn: sqlite3.Connection) -> int:
     with conn:
-        conn.executescript(_SCHEMA)
-        for k, v in _SEED:
+        conn.executescript(SCHEMA_TEXT)
+        for k, v in SEED_META:
             conn.execute(
                 "INSERT INTO memo_meta(k,v) VALUES(?,?) "
                 "ON CONFLICT(k) DO NOTHING",

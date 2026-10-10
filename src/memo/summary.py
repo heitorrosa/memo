@@ -15,7 +15,7 @@ from memo import skills
 ORIENTATION = skills.ORIENTATION
 
 
-def _age_days(updated_at: str) -> str:
+def age_days_label(updated_at: str) -> str:
     try:
         dt = datetime.datetime.fromisoformat(updated_at)
         if dt.tzinfo is None:
@@ -33,7 +33,7 @@ def top_memories_lines(conn: sqlite3.Connection, limit: int = 10) -> list[str]:
     lines = []
     for key, typ, value, uses, updated in rows:
         v = value if len(value) <= 160 else value[:160] + "…"
-        lines.append(f"- [{typ}] {key}: {v} (age {_age_days(updated)}d · used {uses}x)")
+        lines.append(f"- [{typ}] {key}: {v} (age {age_days_label(updated)}d · used {uses}x)")
     return lines
 
 

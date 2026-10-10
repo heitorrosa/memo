@@ -38,7 +38,7 @@ def test_embed_deterministic():
 
 def test_offline_failure(monkeypatch):
     # F-01: model download with no network -> envelope error, no hang/half-row.
-    monkeypatch.setattr(embeddings, "_load_model", lambda: (_ for _ in ()).throw(
+    monkeypatch.setattr(embeddings, "load_model", lambda: (_ for _ in ()).throw(
         RuntimeError("fetch failed: offline")))
     with pytest.raises(RuntimeError, match="embedding model unavailable offline"):
         embeddings.embed(["hello"])

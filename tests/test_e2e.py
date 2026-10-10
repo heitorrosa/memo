@@ -124,7 +124,7 @@ def test_single_truth_direction(tmp_path):
 
 def test_session_survives_dead_db(tmp_path, capsys):
     """F-03/M-026: dead container -> warn + stale, session never raises."""
-    assert server._health_probe("http://127.0.0.1:9/healthz") == 1
+    assert server.health_probe("http://127.0.0.1:9/healthz") == 1
     assert "FAIL" in capsys.readouterr().err
     conn = _mem(tmp_path)  # stale local snapshot still renders
     assert "(none yet)" in summary.bootstrap_text(conn)

@@ -12,23 +12,23 @@ import sys
 
 OUTCOMES = ("unrelated", "qualifies", "extends", "contradicts", "reasserts")
 
-_REASSERT = re.compile(r"\b(as of \d{4}|still|confirm(?:s|ed|ing)?|remains?|continues? to)\b", re.I)
-_NEGATE = re.compile(
+REASSERT_PATTERN = re.compile(r"\b(as of \d{4}|still|confirm(?:s|ed|ing)?|remains?|continues? to)\b", re.I)
+NEGATION_PATTERN = re.compile(
     r"\b(n['’]t\b|not\b|no longer\b|now\b|instead\b|switch(?:ed|ing)?\b|"
     r"rather than\b|prefer .* over\b|actually\b|changed?\b|used to\b)", re.I)
-_ADDITIVE = re.compile(r"\b(also\b|too\b|as well\b|in (?-i:[A-Z])|for (?:work|study|research|the scope)|some\b)", re.I)
-_CORRECT = re.compile(r"\b(actually\b|correction\b|meant\b|was wrong\b|\d{4}-\d{2})", re.I)
+ADDITIVE_PATTERN = re.compile(r"\b(also\b|too\b|as well\b|in (?-i:[A-Z])|for (?:work|study|research|the scope)|some\b)", re.I)
+CORRECTION_PATTERN = re.compile(r"\b(actually\b|correction\b|meant\b|was wrong\b|\d{4}-\d{2})", re.I)
 
-_STOP = frozenset(
+STOP_WORDS = frozenset(
     "the a an in on of for to uses use using with some also still now as is are was were be been i my me".split())
 
 
-def _words(s: str) -> set[str]:
-    return {w.lower() for w in re.findall(r"[A-Za-z]+", s)} - _STOP
+def token_words(s: str) -> set[str]:
+    return {w.lower() for w in re.findall(r"[A-Za-z]+", s)} - STOP_WORDS
 
 
-def _overlap(a: str, b: str) -> bool:
-    wa, wb = _words(a), _words(b)
+def has_overlap(a: str, b: str) -> bool:
+    wa, wb = token_words(a), token_words(b)
     return bool(wa & wb)
 
 
@@ -40,9 +40,9 @@ def classify(old, new_key: str, new_value: str, judge=None) -> str:
     """
     old_value = old.get("value") if isinstance(old, dict) else str(old)
     old_s, new_s = old_value or "", new_value or ""
-    if _REASSERT.search(new_s):
+    if REASSERT_PATTERN.search(new_s):
         return "reasserts"
-    if _NEGATE.search(new_s) or _NEGATE.search(old_s):
+    if NEGATION_PATTERN.search(new_s) or NEGATION_PATTERN.search(old_s):
         if judge is not None:
             try:
                 verdict = str(judge(old_s, new_key, new_s)).strip().lower()
@@ -53,12 +53,12 @@ def classify(old, new_key: str, new_value: str, judge=None) -> str:
             print(f"judge fallback: non-token output {verdict!r} -> extends",
                   file=sys.stderr)
         return "contradicts"
-    if _ADDITIVE.search(new_s):
-        return "qualifies" if _overlap(old_s, new_s) else "unrelated"
+    if ADDITIVE_PATTERN.search(new_s):
+        return "qualifies" if has_overlap(old_s, new_s) else "unrelated"
     return "extends"
 
 
-def _coerce(s: str) -> str:
+def coerce_date(s: str) -> str:
     s = s.strip()
     if re.fullmatch(r"\d{4}-\d{2}", s):
         return s + "-01T00:00:00"
@@ -72,7 +72,7 @@ def parse_ts(s: str) -> datetime.datetime:
 
     Raises ValueError on garbage (caller maps to the internal envelope).
     """
-    dt = datetime.datetime.fromisoformat(_coerce(s))
+    dt = datetime.datetime.fromisoformat(coerce_date(s))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
     return dt

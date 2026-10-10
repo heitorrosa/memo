@@ -29,26 +29,26 @@ ORIENTATION = (
 )
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
 
 
-def _hash(body: str) -> str:
+def hash_body(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _short(description: str, words: int = 20) -> str:
+def shorten_text(description: str, words: int = 20) -> str:
     parts = description.split()
     return description if len(parts) <= words else " ".join(parts[:words]) + " …"
 
 
-def _l0_line(name: str, description: str) -> str:
-    return f"- **{name}** — {_short(description)}"
+def l0_line(name: str, description: str) -> str:
+    return f"- **{name}** — {shorten_text(description)}"
 
 
-def _frontmatter(name: str, description: str, version: int, body: str) -> str:
+def build_frontmatter(name: str, description: str, version: int, body: str) -> str:
     return (
         f"---\nname: {name}\ndescription: {description}\n"
         f"version: {version}\n---\n{body}"
@@ -65,8 +65,8 @@ def put(conn: sqlite3.Connection, name: str, description: str, body: str,
     Re-put of a tombstoned name resurrects it, continuing the counter (Q-04).
     Full-body rewrites go through put, NOT update (#9).
     """
-    now = _now()
-    h = _hash(body)
+    now = utc_now()
+    h = hash_body(body)
     row = conn.execute(
         "SELECT description, body, hash, version, source FROM skills WHERE name=?",
         (name,),
@@ -93,7 +93,7 @@ def put(conn: sqlite3.Connection, name: str, description: str, body: str,
         return {"hash": h, "version": old_version}
     if base_version is not None and base_version != old_version:
         new_body = f"{body}\n\n## Revision v{old_version} (superseded, {now})\n{old_body}"
-        new_hash, v = _hash(new_body), old_version + 1
+        new_hash, v = hash_body(new_body), old_version + 1
         with conn:
             conn.execute(
                 "UPDATE skills SET description=?,body=?,hash=?,version=?,"
@@ -111,7 +111,7 @@ def put(conn: sqlite3.Connection, name: str, description: str, body: str,
     return {"hash": h, "version": v}
 
 
-def _split_revisions(body: str) -> tuple[str, list[str]]:
+def split_revisions(body: str) -> tuple[str, list[str]]:
     """Split an append-only body into (base, [revision sections])."""
     chunks, current = [], []
     for line in body.split("\n"):
@@ -143,12 +143,12 @@ def get(conn: sqlite3.Connection, name: str, version: int | None = None) -> dict
                 "hash": h, "version": cur}
     if version < 1 or version > cur:
         return errors.err("not_found", f"skill {name!r} has no version {version}")
-    base, sections = _split_revisions(body)
+    base, sections = split_revisions(body)
     # NOTE: pins are exact only within the current put generation; a later
     # full-rewrite put resets the base while the counter continues.
     old_body = base if version == 1 else (base + "\n\n" + "\n\n".join(sections[:version - 1]))
     return {"name": name, "description": description, "body": old_body,
-            "hash": _hash(old_body), "version": version}
+            "hash": hash_body(old_body), "version": version}
 
 
 def update(conn: sqlite3.Connection, name: str, patch: str) -> dict:
@@ -159,14 +159,14 @@ def update(conn: sqlite3.Connection, name: str, patch: str) -> dict:
     if row is None or row[2] == "tombstone":
         return errors.err("not_found", f"skill {name!r} not found")
     body, version, _ = row
-    now, v = _now(), version + 1
+    now, v = utc_now(), version + 1
     new_body = f"{body}\n\n## Revision v{v} ({now})\n{patch}"
     with conn:
         conn.execute(
             "UPDATE skills SET body=?,hash=?,version=?,updated_at=? WHERE name=?",
-            (new_body, _hash(new_body), v, now, name),
+            (new_body, hash_body(new_body), v, now, name),
         )
-    return {"hash": _hash(new_body), "version": v}
+    return {"hash": hash_body(new_body), "version": v}
 
 
 def tombstone(conn: sqlite3.Connection, name: str) -> dict:
@@ -182,7 +182,7 @@ def tombstone(conn: sqlite3.Connection, name: str) -> dict:
         with conn:
             conn.execute(
                 "UPDATE skills SET source='tombstone',updated_at=? WHERE name=?",
-                (_now(), name),
+                (utc_now(), name),
             )
     return {"name": name, "hash": h, "version": version, "source": "tombstone"}
 
@@ -193,19 +193,19 @@ def l0_index(conn: sqlite3.Connection) -> list[str]:
         "SELECT name, description FROM skills WHERE source != 'tombstone' "
         "ORDER BY name ASC"
     ).fetchall()
-    return [_l0_line(n, d) for n, d in rows]
+    return [l0_line(n, d) for n, d in rows]
 
 
-def _live(conn: sqlite3.Connection) -> list[tuple]:
+def live_rows(conn: sqlite3.Connection) -> list[tuple]:
     return conn.execute(
         "SELECT name, description, body, hash, version FROM skills "
         "WHERE source != 'tombstone' ORDER BY name ASC"
     ).fetchall()
 
 
-def _sync_files(conn: sqlite3.Connection, known: list[dict] | None,
+def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
                 offset: int, limit: int | None) -> dict:
-    live = _live(conn)
+    live = live_rows(conn)
     by_name = {n: (d, b, h, v) for n, d, b, h, v in live}
     tombstoned = {
         r[0] for r in conn.execute(
@@ -215,7 +215,7 @@ def _sync_files(conn: sqlite3.Connection, known: list[dict] | None,
     if known is None:
         writes = [
             {"path": f"skills/{n}/SKILL.md",
-             "content": _frontmatter(n, d, v, b), "hash": h}
+             "content": build_frontmatter(n, d, v, b), "hash": h}
             for n, d, b, h, v in live
         ]
         deletes: list[dict] = []
@@ -226,7 +226,7 @@ def _sync_files(conn: sqlite3.Connection, known: list[dict] | None,
         }
         writes = [
             {"path": f"skills/{n}/SKILL.md",
-             "content": _frontmatter(n, d, v, b), "hash": h}
+             "content": build_frontmatter(n, d, v, b), "hash": h}
             for n, d, b, h, v in live if have.get(n) != h
         ]
         # Tombstoned OR unknown-to-server names the client lists -> delete.
@@ -250,7 +250,7 @@ def _sync_files(conn: sqlite3.Connection, known: list[dict] | None,
             "files_to_delete": deletes, "offset": offset, "total": total}
 
 
-def _rank_filter(live: list[tuple], filt: str) -> list[tuple]:
+def rank_filter(live: list[tuple], filt: str) -> list[tuple]:
     words = filt.lower().split()
     scored = []
     for row in live:
@@ -261,19 +261,19 @@ def _rank_filter(live: list[tuple], filt: str) -> list[tuple]:
     return [r for _, _, r in sorted(scored)]
 
 
-def _sync_web(conn: sqlite3.Connection, filt: str | None,
+def sync_web(conn: sqlite3.Connection, filt: str | None,
               offset: int, limit: int | None) -> dict:
-    live = _live(conn)
+    live = live_rows(conn)
     total = len(live)
     full_chars = sum(len(n) + len(d) for n, d, _, _, _ in live)
     truncated = total > WEB_TRUNCATE_SKILLS or full_chars > WEB_TRUNCATE_CHARS
-    rows = _rank_filter(live, filt) if filt else list(live)
+    rows = rank_filter(live, filt) if filt else list(live)
     offset = max(0, offset)
     page = rows if not truncated else rows[offset:offset + (limit or WEB_PAGE)]
     if not truncated and (offset or limit):
         page = rows[offset:offset + limit] if limit else rows[offset:]
     lines = [
-        f"{_l0_line(n, d)} → `skill_get(\"{n}\")` for the body."
+        f"{l0_line(n, d)} → `skill_get(\"{n}\")` for the body."
         for n, d, _, _, _ in page
     ]
     head = (f"## Skill index ({total} — full, keep in mind for the whole "
@@ -294,15 +294,15 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
     get). Unknown harness -> not_found. Maintenance tail is wired by Task 7,
     not here."""
     if harness == "web":
-        return _sync_web(conn, filter, offset, limit)
+        return sync_web(conn, filter, offset, limit)
     if harness not in FILE_HARNESSES:
         return errors.err("not_found", f"unknown harness {harness!r}")
-    return _sync_files(conn, known, offset, limit)
+    return sync_files(conn, known, offset, limit)
 
 
 # L4 tail (Task 7, additive §23): janitor at the END of every skill_sync.
 # Logic above untouched; lazy import keeps the skills→memory ban intact.
-_orig_sync = sync
+original_sync = sync
 
 
 def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None,
@@ -310,13 +310,13 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
          limit: int | None = None) -> dict:
     from memo import maintenance
 
-    out = _orig_sync(conn, harness, known=known, filter=filter,
+    out = original_sync(conn, harness, known=known, filter=filter,
                      offset=offset, limit=limit)
     maintenance.run(conn)
     return out
 
 
-def _split_frontmatter(text: str) -> tuple[dict | None, str]:
+def split_frontmatter(text: str) -> tuple[dict | None, str]:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return None, text
@@ -331,7 +331,7 @@ def _split_frontmatter(text: str) -> tuple[dict | None, str]:
     return meta, "\n".join(lines[end + 1:])
 
 
-def _default_fetch(url: str) -> str:
+def default_fetch(url: str) -> str:
     import httpx  # lazy: importing memo must never load the network stack
 
     try:
@@ -349,7 +349,7 @@ def install(conn: sqlite3.Connection, repo: str, skill_name: str,
     """Fetch SKILL.md raw, validate frontmatter, then behave EXACTLY like put
     (plus a files_to_write delta so file harnesses materialize immediately).
     fetch(url)->str is injectable; tests MUST mock it (M-020, no live net)."""
-    fetch = fetch or _default_fetch
+    fetch = fetch or default_fetch
     if repo.startswith("skills.sh/"):
         slug = repo[len("skills.sh/"):]
         url = f"https://skills.sh/{slug}/skills/{skill_name}/SKILL.md"
@@ -372,7 +372,7 @@ def install(conn: sqlite3.Connection, repo: str, skill_name: str,
         first = str(e).splitlines()[0] if str(e) else type(e).__name__
         detail = first if first.startswith("fetch failed") else f"fetch failed: {first}"
         return errors.err("internal", detail)
-    meta, body = _split_frontmatter(text)
+    meta, body = split_frontmatter(text)
     if not meta or not meta.get("name") or not meta.get("description"):
         return errors.err("not_found", f"frontmatter invalid for {skill_name!r}")
     if meta["name"] != skill_name:
@@ -383,7 +383,7 @@ def install(conn: sqlite3.Connection, repo: str, skill_name: str,
     row = get(conn, skill_name)
     receipt["files_to_write"] = [{
         "path": f"skills/{skill_name}/SKILL.md",
-        "content": _frontmatter(
+        "content": build_frontmatter(
             skill_name, row["description"], row["version"], row["body"]),
         "hash": receipt["hash"],
     }]

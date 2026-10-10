@@ -22,7 +22,7 @@ from memo import db, errors, memory, skills, summary
 VERSION = 3
 
 
-def _descriptions() -> dict:
+def load_descriptions() -> dict:
     """Tool/prompt descriptions (§§14/8/21 — they ARE the control plane).
 
     Loaded once from tool_descriptions.json; wording is byte-identical
@@ -32,7 +32,7 @@ def _descriptions() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-DESCRIPTIONS = _descriptions()
+DESCRIPTIONS = load_descriptions()
 
 MEMORY_TOOLS = ("memory_search", "memory_save", "memory_delete")
 SKILL_TOOLS = ("skill_get", "skill_put", "skill_update", "skill_install",
@@ -40,13 +40,13 @@ SKILL_TOOLS = ("skill_get", "skill_put", "skill_update", "skill_install",
 ALL_TOOLS = ("memory_delete", "memory_save", "memory_search") + SKILL_TOOLS
 
 
-def _flag(name: str) -> bool:
+def env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in ("1", "true", "yes")
 
 
 def resolve_domains() -> tuple[bool, bool]:
     """(memory_on, skills_on) from MEMO_DISABLE_* (spec §4.1b)."""
-    return not _flag("MEMO_DISABLE_MEMORY"), not _flag("MEMO_DISABLE_SKILLS")
+    return not env_flag("MEMO_DISABLE_MEMORY"), not env_flag("MEMO_DISABLE_SKILLS")
 
 
 def startup_line(db_path: str, has_vec: bool, mem_on: bool,
@@ -56,13 +56,13 @@ def startup_line(db_path: str, has_vec: bool, mem_on: bool,
             f" skills={'on' if skills_on else 'off'}")
 
 
-def _log(op: str, ns: str, ms: float, rows: int, action: str) -> None:
+def log_operation(op: str, ns: str, ms: float, rows: int, action: str) -> None:
     # NEVER values/bodies/keys/bundle text (keys can be PII-shaped).
     print(f"op={op} ns={ns} ms={ms:.1f} rows={rows} action={action}",
           file=sys.stderr)
 
 
-def _internal(exc: Exception) -> dict:
+def internal_error(exc: Exception) -> dict:
     first = str(exc).splitlines()[0] if str(exc) else ""
     detail = f"{type(exc).__name__}: {first}".rstrip(": ")
     return errors.err("internal", detail)
@@ -86,9 +86,9 @@ def do_memory_search(conn, query, limit=10, namespace="default",
                                 valid_at=valid_at, as_known_at=as_known_at,
                                 include_superseded=include_superseded)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
+        return internal_error(exc)
     rows = len(out) if isinstance(out, list) else 0
-    _log("memory_search", namespace, (time.perf_counter() - t) * 1000, rows,
+    log_operation("memory_search", namespace, (time.perf_counter() - t) * 1000, rows,
          out.get("error", "-") if isinstance(out, dict) else "-")
     return out
 
@@ -105,8 +105,8 @@ def do_memory_save(conn, key, value, typ="context", namespace="default",
             out = memory.save(conn, key, value, type=typ, namespace=namespace,
                               valid_from=valid_from)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
-    _log("memory_save", namespace, (time.perf_counter() - t) * 1000, 1,
+        return internal_error(exc)
+    log_operation("memory_save", namespace, (time.perf_counter() - t) * 1000, 1,
          out.get("action", out.get("error", "-")))
     return out
 
@@ -120,13 +120,13 @@ def do_memory_delete(conn, key, namespace="default", lock=None):
         else:
             out = memory.remove(conn, key, namespace=namespace)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
-    _log("memory_delete", namespace, (time.perf_counter() - t) * 1000, 1,
+        return internal_error(exc)
+    log_operation("memory_delete", namespace, (time.perf_counter() - t) * 1000, 1,
          out.get("action", "-"))
     return out
 
 
-def _sync_call(conn, harness, known, filt, offset, limit, lock):
+def sync_call_locked(conn, harness, known, filt, offset, limit, lock):
     if lock is not None:
         with lock:
             return skills.sync(conn, harness, known=known, filter=filt,
@@ -139,11 +139,11 @@ def do_skill_sync(conn, harness, known=None, filt=None, offset=0, limit=None,
                   lock=None):
     t = time.perf_counter()
     try:
-        out = _sync_call(conn, harness, known, filt, offset, limit, lock)
+        out = sync_call_locked(conn, harness, known, filt, offset, limit, lock)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
+        return internal_error(exc)
     rows = len(out.get("files_to_write", [])) if isinstance(out, dict) else 0
-    _log("skill_sync", "-", (time.perf_counter() - t) * 1000, rows,
+    log_operation("skill_sync", "-", (time.perf_counter() - t) * 1000, rows,
          out.get("mode", out.get("error", "-")) if isinstance(out, dict)
          else "-")
     return out
@@ -156,7 +156,7 @@ def do_skill_get(conn, name, version=None, lock=None):
                 return skills.get(conn, name, version=version)
         return skills.get(conn, name, version=version)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
+        return internal_error(exc)
 
 
 def do_skill_put(conn, name, description, body, source="local", lock=None):
@@ -166,7 +166,7 @@ def do_skill_put(conn, name, description, body, source="local", lock=None):
                 return skills.put(conn, name, description, body, source=source)
         return skills.put(conn, name, description, body, source=source)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
+        return internal_error(exc)
 
 
 def do_skill_update(conn, name, patch, lock=None):
@@ -176,7 +176,7 @@ def do_skill_update(conn, name, patch, lock=None):
                 return skills.update(conn, name, patch)
         return skills.update(conn, name, patch)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
+        return internal_error(exc)
 
 
 def do_skill_install(conn, repo, skill_name, fetch=None, lock=None):
@@ -187,7 +187,7 @@ def do_skill_install(conn, repo, skill_name, fetch=None, lock=None):
                 return skills.install(conn, repo, skill_name, **kw)
         return skills.install(conn, repo, skill_name, **kw)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
-        return _internal(exc)
+        return internal_error(exc)
 
 
 # --- bootstrap text (flag-aware) ---
@@ -222,7 +222,7 @@ def bootstrap_text(conn, mem_on=True, skills_on=True) -> str:
 
 # --- server build ---
 
-def _server_connect(path: str) -> sqlite3.Connection:
+def server_connect(path: str) -> sqlite3.Connection:
     # Same shape as db.connect + check_same_thread=False: the HTTP layer
     # serves tools from worker threads behind one lock (single writer).
     conn = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
@@ -251,7 +251,7 @@ def build_server(db_path: str, memory_on: bool | None = None,
     if not memory_on and not skills_on:
         print("memo: no domains enabled", file=sys.stderr)
         raise SystemExit(2)
-    conn = _server_connect(db_path)
+    conn = server_connect(db_path)
     lock = threading.Lock()
     srv = FastMCP("memo")
     srv.memo_conn, srv.memo_lock = conn, lock  # noqa: ATTR-defined
@@ -325,9 +325,9 @@ def dump_tool_names(srv) -> list[str]:
 
 # --- HTTP (PRIMARY): bearer gate + /healthz ---
 
-class _Bearer:
+class BearerAuth:
     def __init__(self, app, token: str):
-        self.app, self._token = app, token
+        self.app, self.token = app, token
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope.get("path") == "/healthz":
@@ -338,7 +338,7 @@ class _Bearer:
             if k == b"authorization":
                 got = v.decode("latin-1")
                 break
-        want = f"Bearer {self._token}"
+        want = f"Bearer {self.token}"
         try:
             ok = hmac.compare_digest(got, want)
         except Exception:
@@ -378,12 +378,12 @@ def build_http_app(srv, token: str):
     app = Starlette(lifespan=lifespan,
                     routes=[Route("/healthz", healthz, methods=["GET"]),
                             Mount("/", app=mcp_app)])
-    return _Bearer(app, token)
+    return BearerAuth(app, token)
 
 
 # --- CLI ---
 
-def _parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="memo")
     p.add_argument("--db", default=None)
     p.add_argument("--dump-tools", action="store_true")
@@ -396,7 +396,7 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _refuse_if_locked(path: str) -> bool:
+def refuse_if_locked(path: str) -> bool:
     """Best-effort single-writer guard (M-032): refuse a DB another process
     holds a write lock on, and point at the container instead."""
     if path == ":memory:":
@@ -415,7 +415,7 @@ def _refuse_if_locked(path: str) -> bool:
         return False
 
 
-def _health_probe(url: str) -> int:
+def health_probe(url: str) -> int:
     import httpx
 
     try:
@@ -428,7 +428,7 @@ def _health_probe(url: str) -> int:
     return 0 if ok else 1
 
 
-def _backup(db_path: str, dest: str) -> int:
+def backup_database(db_path: str, dest: str) -> int:
     src = sqlite3.connect(db_path, timeout=10.0)
     try:
         dst = sqlite3.connect(dest)
@@ -443,15 +443,15 @@ def _backup(db_path: str, dest: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
     if args.health is not None and not args.http and args.db is None \
             and args.backup is None and not args.dump_tools:
-        return _health_probe(args.health)
+        return health_probe(args.health)
     if not args.db:
         print("memo: --db <path> is required", file=sys.stderr)
         return 2
     if args.backup:
-        return _backup(args.db, args.backup)
+        return backup_database(args.db, args.backup)
     mem_on, sk_on = resolve_domains()
     if not mem_on and not sk_on:
         print("memo: no domains enabled", file=sys.stderr)
@@ -459,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dump_tools:
         print("\n".join(dump_tool_names(build_server(args.db))))
         return 0
-    if _refuse_if_locked(args.db):
+    if refuse_if_locked(args.db):
         print(f"memo: {args.db} is held by another process (the container"
               f" is the sole writer) — refusing stdio over the live DB",
               file=sys.stderr)
@@ -474,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def main_http(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
     token = os.getenv("MEMO_TOKEN", "")
     if not token:
         print("memo: MEMO_TOKEN required for --http", file=sys.stderr)
@@ -486,7 +486,7 @@ def main_http(argv: list[str] | None = None) -> int:
     if not mem_on and not sk_on:
         print("memo: no domains enabled", file=sys.stderr)
         return 2
-    if _refuse_if_locked(args.db):
+    if refuse_if_locked(args.db):
         print(f"memo: {args.db} is held by another process — refusing"
               f" a second writer on the live DB", file=sys.stderr)
         return 2

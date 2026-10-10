@@ -20,7 +20,7 @@ STABILITY = {"preference": 14.0, "feedback": 10.0, "analysis": 7.0, "context": 3
 BETA, R_FLOOR, S_CAP_X = 0.3, 0.05, 4.0
 FUZZ_HIT = 80
 
-_ACK = frozenset({
+ACK_PHRASES = frozenset({
     "hi", "hello", "hey", "thanks", "thank you", "bye", "goodbye", "ok",
     "okay", "got it", "sure", "yes", "no", "yep", "nope", "cool", "great",
     "nice", "acknowledged", "noted", "will do", "sounds good", "roger",
@@ -28,18 +28,18 @@ _ACK = frozenset({
     "cheers", "cya", "see you", "later", "good morning", "good night",
     "morning", "night", "welcome",
 })
-_DURABLE_NOUN = re.compile(
+DURABLE_NOUN_PATTERN = re.compile(
     r"prefer|like|hate|love|use[sd]? |stack|project|deploy|editor|convention|"
     r"credential|feedback|analysis|freeze|commit|path|convention|workflow|"
     r"decid|believe|live[sd]? in|work[sd]? (?:at|on|in)|allergic|goal",
     re.I)
-_SHELL_EXIT = re.compile(r"exit(?:\s*code)?\s*[:=]?\s*\d+", re.I)
+SHELL_EXIT_PATTERN = re.compile(r"exit(?:\s*code)?\s*[:=]?\s*\d+", re.I)
 
-_COLS = ("key value type embedding stability score uses created_at updated_at "
+MEMORY_COLUMNS = ("key value type embedding stability score uses created_at updated_at "
          "valid_from valid_to status family_id superseded_by relation_type".split())
 
 
-def _row(conn, key, namespace):
+def fetch_row(conn, key, namespace):
     r = conn.execute(
         "SELECT key, value, type, embedding, stability, score, uses,"
         " created_at, updated_at, valid_from, valid_to, status, family_id,"
@@ -51,17 +51,17 @@ def _row(conn, key, namespace):
          "family_id", "superseded_by", "relation_type"), r)) if r else None
 
 
-def _is_trivia(value: str) -> bool:
+def is_trivia(value: str) -> bool:
     norm = re.sub(r"[^\w\s]", "", value.strip().lower())
-    if len(value.strip()) < 3 or norm in _ACK:
+    if len(value.strip()) < 3 or norm in ACK_PHRASES:
         return True
     if (value.lstrip().startswith(("$", ">")) and len(value) > 200
-            and _SHELL_EXIT.search(value) and not _DURABLE_NOUN.search(value)):
+            and SHELL_EXIT_PATTERN.search(value) and not DURABLE_NOUN_PATTERN.search(value)):
         return True
     return False
 
 
-def _grow(stability: float, stype: str, age_days: float) -> float:
+def grow_stability(stability: float, stype: str, age_days: float) -> float:
     r = math.exp(-max(0.0, age_days) / stability)
     if r < R_FLOOR:
         return stability
@@ -75,13 +75,13 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
     now = temporal.now_iso()
     if len(value) > 4096:
         warnings.warn("memory value large (>4KB), stored whole; truncation is display-only")
-    vf = temporal._coerce(valid_from) if valid_from else now
+    vf = temporal.coerce_date(valid_from) if valid_from else now
     try:
         temporal.parse_ts(vf)
     except ValueError:
         vf = now
 
-    old = _row(conn, key, namespace)
+    old = fetch_row(conn, key, namespace)
     if old is not None:
         # Step 1: exact-key hit = UPDATE, never supersede (§8.1).
         emb = embeddings.embed([value])[0]
@@ -91,7 +91,7 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
                 "UPDATE memories SET value=?, embedding=?, updated_at=?,"
                 " uses=uses+1, score=score*1.1, stability=? WHERE key=? AND namespace=?",
                 (value, emb, max(now, old["updated_at"]),
-                 _grow(old["stability"], old["type"], age), key, namespace))
+                 grow_stability(old["stability"], old["type"], age), key, namespace))
         return {"key": key, "action": "updated"}
 
     # Step 2: fuzzy scan (current rows, same namespace; superseded excluded).
@@ -105,7 +105,7 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
             break
     if hit is not None:
         hk, hv = hit
-        hrow = _row(conn, hk, namespace)
+        hrow = fetch_row(conn, hk, namespace)
         outcome = temporal.classify(hv, key, value)
         if outcome == "unrelated":
             pass  # fall through to insert (NEW family)
@@ -130,10 +130,10 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
                     "UPDATE memories SET value=?, embedding=?, updated_at=?,"
                     " uses=uses+1, score=score*1.1, stability=? WHERE key=? AND namespace=?",
                     (merged, emb, max(now, hrow["updated_at"]),
-                     _grow(hrow["stability"], hrow["type"], age), hk, namespace))
+                     grow_stability(hrow["stability"], hrow["type"], age), hk, namespace))
             return {"key": hk, "action": "updated"}
         elif outcome == "contradicts":
-            rel = "corrects" if temporal._CORRECT.search(value) else "supersedes"
+            rel = "corrects" if temporal.CORRECTION_PATTERN.search(value) else "supersedes"
             emb = embeddings.embed([value])[0]
             with conn:
                 conn.execute(
@@ -155,11 +155,11 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
                     "UPDATE memories SET updated_at=?, valid_from=?,"
                     " uses=uses+1, score=score*1.1, stability=? WHERE key=? AND namespace=?",
                     (max(now, hrow["updated_at"]), vf,
-                     _grow(hrow["stability"], hrow["type"], age), hk, namespace))
+                     grow_stability(hrow["stability"], hrow["type"], age), hk, namespace))
             return {"key": hk, "action": "updated"}
 
     # Step 3: durability gate (§10) — reject trivia, SUCCESS shape, 0 rows.
-    if _is_trivia(value):
+    if is_trivia(value):
         return {"key": key, "action": "rejected_trivia"}
 
     # Step 4: insert (family=uuid4hex, valid_from unclamped — may be future).
@@ -174,7 +174,7 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
     return {"key": key, "action": "created"}
 
 
-def _fts_scores(conn, query: str) -> dict[int, float]:
+def fts_scores(conn, query: str) -> dict[int, float]:
     toks = [t for t in re.findall(r"[A-Za-z0-9_]+", query) if len(t) > 1]
     if not toks:
         return {}
@@ -214,7 +214,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
     limit = min(max(1, limit), 50)  # silent clamp, no error
 
     qemb = embeddings.embed([query])[0]
-    fts = _fts_scores(conn, query)
+    fts = fts_scores(conn, query)
     id_rows = conn.execute(
         "SELECT rowid, key, value, type, embedding, stability, score, uses,"
         " created_at, updated_at, valid_from, valid_to, status, family_id"
@@ -272,7 +272,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
     return scored
 
 
-_ARCH_COLS = ("key,namespace,value,type,embedding,stability,score,uses,"
+ARCHIVE_COLUMNS = ("key,namespace,value,type,embedding,stability,score,uses,"
               "created_at,updated_at,valid_from,valid_to,status,family_id,"
               "superseded_by,relation_type")
 
@@ -280,13 +280,13 @@ _ARCH_COLS = ("key,namespace,value,type,embedding,stability,score,uses,"
 def remove(conn: sqlite3.Connection, key: str,
            namespace: str = "default") -> dict:
     """Soft-delete ONLY (§15, M-004): row → archived_memories, family kept."""
-    row = _row(conn, key, namespace)
+    row = fetch_row(conn, key, namespace)
     if row is None:
         return {"key": key, "action": "not_found"}
     now = temporal.now_iso()
     with conn:
         conn.execute(
-            f"INSERT INTO archived_memories({_ARCH_COLS},archived_at,"
+            f"INSERT INTO archived_memories({ARCHIVE_COLUMNS},archived_at,"
             f"archived_reason) VALUES({','.join('?' for _ in range(16))},?,?)",
             (row["key"], namespace, row["value"], row["type"], row["embedding"],
              row["stability"], row["score"], row["uses"], row["created_at"],
@@ -301,7 +301,7 @@ def remove(conn: sqlite3.Connection, key: str,
 # L4 tail (Task 7, additive §8.5/§23): maintenance hook. t0 is captured BEFORE
 # the write so the same-call sweep can never take this call's row (M-024).
 # Logic above untouched; mutating receipts gain `archived` (victim key|None).
-_orig_save = save
+original_save = save
 
 
 def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
@@ -309,7 +309,7 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
     from memo import maintenance
 
     t0 = temporal.now_iso()
-    receipt = _orig_save(conn, key, value, type=type, namespace=namespace,
+    receipt = original_save(conn, key, value, type=type, namespace=namespace,
                          valid_from=valid_from)
     maint = maintenance.run(conn, now=t0)
     if receipt.get("action") in ("created", "updated", "superseded"):
