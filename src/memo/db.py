@@ -44,11 +44,11 @@ def connect(path: str) -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> int:
     with conn:
         conn.executescript(SCHEMA_TEXT)
-        for k, v in SEED_META:
+        for key, value in SEED_META:
             conn.execute(
                 "INSERT INTO memo_meta(k,v) VALUES(?,?) "
                 "ON CONFLICT(k) DO NOTHING",
-                (k, v),
+                (key, value),
             )
         for domain, version, sql in MIGRATIONS:
             key = f"{domain}_schema_{version}"

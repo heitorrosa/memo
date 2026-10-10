@@ -40,7 +40,7 @@ MEMORY_COLUMNS = ("key value type embedding stability score uses created_at upda
 
 
 def fetch_row(conn, key, namespace):
-    r = conn.execute(
+    record = conn.execute(
         "SELECT key, value, type, embedding, stability, score, uses,"
         " created_at, updated_at, valid_from, valid_to, status, family_id,"
         " superseded_by, relation_type FROM memories WHERE key=? AND namespace=?",
@@ -48,12 +48,12 @@ def fetch_row(conn, key, namespace):
     return dict(zip(
         ("key", "value", "type", "embedding", "stability", "score", "uses",
          "created_at", "updated_at", "valid_from", "valid_to", "status",
-         "family_id", "superseded_by", "relation_type"), r)) if r else None
+         "family_id", "superseded_by", "relation_type"), record)) if record else None
 
 
 def is_trivia(value: str) -> bool:
-    norm = re.sub(r"[^\w\s]", "", value.strip().lower())
-    if len(value.strip()) < 3 or norm in ACK_PHRASES:
+    normalized = re.sub(r"[^\w\s]", "", value.strip().lower())
+    if len(value.strip()) < 3 or normalized in ACK_PHRASES:
         return True
     if (value.lstrip().startswith(("$", ">")) and len(value) > 200
             and SHELL_EXIT_PATTERN.search(value) and not DURABLE_NOUN_PATTERN.search(value)):
@@ -61,11 +61,11 @@ def is_trivia(value: str) -> bool:
     return False
 
 
-def grow_stability(stability: float, stype: str, age_days: float) -> float:
-    r = math.exp(-max(0.0, age_days) / stability)
-    if r < R_FLOOR:
+def grow_stability(stability: float, kind: str, age_days: float) -> float:
+    retention = math.exp(-max(0.0, age_days) / stability)
+    if retention < R_FLOOR:
         return stability
-    return min(stability * (1.0 + BETA * r), S_CAP_X * STABILITY[stype])
+    return min(stability * (1.0 + BETA * retention), S_CAP_X * STABILITY[kind])
 
 
 def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
@@ -75,110 +75,110 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
     now = temporal.now_iso()
     if len(value) > 4096:
         warnings.warn("memory value large (>4KB), stored whole; truncation is display-only")
-    vf = temporal.coerce_date(valid_from) if valid_from else now
+    effective_valid_from = temporal.coerce_date(valid_from) if valid_from else now
     try:
-        temporal.parse_ts(vf)
+        temporal.parse_ts(effective_valid_from)
     except ValueError:
-        vf = now
+        effective_valid_from = now
 
     old = fetch_row(conn, key, namespace)
     if old is not None:
         # Step 1: exact-key hit = UPDATE, never supersede (§8.1).
-        emb = embeddings.embed([value])[0]
+        value_embedding = embeddings.embed([value])[0]
         age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(old["created_at"])).total_seconds() / 86400)
         with conn:
             conn.execute(
                 "UPDATE memories SET value=?, embedding=?, updated_at=?,"
                 " uses=uses+1, score=score*1.1, stability=? WHERE key=? AND namespace=?",
-                (value, emb, max(now, old["updated_at"]),
+                (value, value_embedding, max(now, old["updated_at"]),
                  grow_stability(old["stability"], old["type"], age), key, namespace))
         return {"key": key, "action": "updated"}
 
     # Step 2: fuzzy scan (current rows, same namespace; superseded excluded).
-    cands = conn.execute(
+    candidates = conn.execute(
         "SELECT key, value FROM memories WHERE namespace=? AND status='current'",
         (namespace,)).fetchall()
     hit = None
-    for ck, cv in cands:
-        if fuzz.ratio(key, ck) >= FUZZ_HIT:
-            hit = (ck, cv)
+    for candidate_key, candidate_value in candidates:
+        if fuzz.ratio(key, candidate_key) >= FUZZ_HIT:
+            hit = (candidate_key, candidate_value)
             break
     if hit is not None:
-        hk, hv = hit
-        hrow = fetch_row(conn, hk, namespace)
-        outcome = temporal.classify(hv, key, value)
+        hit_key, hit_value = hit
+        hit_row = fetch_row(conn, hit_key, namespace)
+        outcome = temporal.classify(hit_value, key, value)
         if outcome == "unrelated":
             pass  # fall through to insert (NEW family)
         elif outcome == "qualifies":
-            fam = hrow["family_id"]
-            emb = embeddings.embed([value])[0]
+            family_id = hit_row["family_id"]
+            value_embedding = embeddings.embed([value])[0]
             with conn:
                 conn.execute(
                     "INSERT INTO memories(key,namespace,value,type,embedding,"
                     "stability,score,uses,created_at,updated_at,valid_from,"
                     "status,family_id,relation_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,"
                     "'current',?,'qualifies')",
-                    (key, namespace, value, type, emb, STABILITY[type], 1.0, 0,
-                     now, now, vf, fam))
+                    (key, namespace, value, type, value_embedding, STABILITY[type], 1.0, 0,
+                     now, now, effective_valid_from, family_id))
             return {"key": key, "action": "created"}
         elif outcome == "extends":
-            emb = embeddings.embed([value])[0]
-            merged = value if hv in value else (hv if value in hv else hv + "; " + value)
-            age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(hrow["created_at"])).total_seconds() / 86400)
+            value_embedding = embeddings.embed([value])[0]
+            merged = value if hit_value in value else (hit_value if value in hit_value else hit_value + "; " + value)
+            age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(hit_row["created_at"])).total_seconds() / 86400)
             with conn:
                 conn.execute(
                     "UPDATE memories SET value=?, embedding=?, updated_at=?,"
                     " uses=uses+1, score=score*1.1, stability=? WHERE key=? AND namespace=?",
-                    (merged, emb, max(now, hrow["updated_at"]),
-                     grow_stability(hrow["stability"], hrow["type"], age), hk, namespace))
-            return {"key": hk, "action": "updated"}
+                    (merged, value_embedding, max(now, hit_row["updated_at"]),
+                     grow_stability(hit_row["stability"], hit_row["type"], age), hit_key, namespace))
+            return {"key": hit_key, "action": "updated"}
         elif outcome == "contradicts":
-            rel = "corrects" if temporal.CORRECTION_PATTERN.search(value) else "supersedes"
-            emb = embeddings.embed([value])[0]
+            relation = "corrects" if temporal.CORRECTION_PATTERN.search(value) else "supersedes"
+            value_embedding = embeddings.embed([value])[0]
             with conn:
                 conn.execute(
                     "UPDATE memories SET status='superseded', valid_to=?,"
                     " superseded_by=? WHERE key=? AND namespace=?",
-                    (vf, key, hk, namespace))
+                    (effective_valid_from, key, hit_key, namespace))
                 conn.execute(
                     "INSERT INTO memories(key,namespace,value,type,embedding,"
                     "stability,score,uses,created_at,updated_at,valid_from,"
                     "status,family_id,relation_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,"
                     "'current',?,?)",
-                    (key, namespace, value, type, emb, STABILITY[type], 1.0, 0,
-                     now, now, vf, hrow["family_id"], rel))
+                    (key, namespace, value, type, value_embedding, STABILITY[type], 1.0, 0,
+                     now, now, effective_valid_from, hit_row["family_id"], relation))
             return {"key": key, "action": "superseded"}
         else:  # reasserts: touch SAME row, new valid_from, never a new row
-            age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(hrow["created_at"])).total_seconds() / 86400)
+            age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(hit_row["created_at"])).total_seconds() / 86400)
             with conn:
                 conn.execute(
                     "UPDATE memories SET updated_at=?, valid_from=?,"
                     " uses=uses+1, score=score*1.1, stability=? WHERE key=? AND namespace=?",
-                    (max(now, hrow["updated_at"]), vf,
-                     grow_stability(hrow["stability"], hrow["type"], age), hk, namespace))
-            return {"key": hk, "action": "updated"}
+                    (max(now, hit_row["updated_at"]), effective_valid_from,
+                     grow_stability(hit_row["stability"], hit_row["type"], age), hit_key, namespace))
+            return {"key": hit_key, "action": "updated"}
 
     # Step 3: durability gate (§10) — reject trivia, SUCCESS shape, 0 rows.
     if is_trivia(value):
         return {"key": key, "action": "rejected_trivia"}
 
     # Step 4: insert (family=uuid4hex, valid_from unclamped — may be future).
-    emb = embeddings.embed([value])[0]
+    value_embedding = embeddings.embed([value])[0]
     with conn:
         conn.execute(
             "INSERT INTO memories(key,namespace,value,type,embedding,stability,"
             "score,uses,created_at,updated_at,valid_from,status,family_id)"
             " VALUES(?,?,?,?,?,?,1.0,0,?,?,?,'current',?)",
-            (key, namespace, value, type, emb, STABILITY[type], now, now, vf,
+            (key, namespace, value, type, value_embedding, STABILITY[type], now, now, effective_valid_from,
              uuid.uuid4().hex))
     return {"key": key, "action": "created"}
 
 
 def fts_scores(conn, query: str) -> dict[int, float]:
-    toks = [t for t in re.findall(r"[A-Za-z0-9_]+", query) if len(t) > 1]
-    if not toks:
+    query_tokens = [token for token in re.findall(r"[A-Za-z0-9_]+", query) if len(token) > 1]
+    if not query_tokens:
         return {}
-    match = " OR ".join(f'"{t}"' for t in toks[:10])
+    match = " OR ".join(f'"{token}"' for token in query_tokens[:10])
     try:
         rows = conn.execute(
             "SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ?"
@@ -202,7 +202,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
     if not query or not query.strip():
         return errors.err("empty_query", "query is empty")
     try:
-        at = temporal.parse_ts(temporal.now_iso() if valid_at == "now" else valid_at)
+        anchor_time = temporal.parse_ts(temporal.now_iso() if valid_at == "now" else valid_at)
     except ValueError:
         return errors.err("internal", f"bad valid_at {valid_at!r}")
     known = None
@@ -213,8 +213,8 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             return errors.err("internal", f"bad as_known_at {as_known_at!r}")
     limit = min(max(1, limit), 50)  # silent clamp, no error
 
-    qemb = embeddings.embed([query])[0]
-    fts = fts_scores(conn, query)
+    query_embedding = embeddings.embed([query])[0]
+    fts_hits = fts_scores(conn, query)
     id_rows = conn.execute(
         "SELECT rowid, key, value, type, embedding, stability, score, uses,"
         " created_at, updated_at, valid_from, valid_to, status, family_id"
@@ -222,53 +222,53 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
 
     now = temporal.parse_ts(temporal.now_iso())
     scored = []
-    for rid, k, v, t, emb, stab, score, uses, ca, ua, vf, vt, st, fam in id_rows:
-        row = {"status": st, "valid_from": vf, "valid_to": vt}
+    for row_id, key, value, kind, embedding, stability, score, uses, created_at, updated_at, valid_from, valid_to, status, family_id in id_rows:
+        row = {"status": status, "valid_from": valid_from, "valid_to": valid_to}
         try:
-            vto = temporal.parse_ts(vt) if vt is not None else None
+            valid_to_parsed = temporal.parse_ts(valid_to) if valid_to is not None else None
         except ValueError:
             continue
         if known is not None:
             try:
-                if temporal.parse_ts(ca) > known:
+                if temporal.parse_ts(created_at) > known:
                     continue
             except ValueError:
                 continue
         # Belief axis: an explicit as_known_at evaluates the window as of K
         # unless the caller also pinned a valid_at question (T-then wins).
-        Tq = at if (valid_at != "now" or known is None) else known
+        query_time = anchor_time if (valid_at != "now" or known is None) else known
         if include_superseded:
-            if not temporal.started(row, Tq):
+            if not temporal.started(row, query_time):
                 continue
-        elif st == "current":
-            if not temporal.in_window(row, Tq):
+        elif status == "current":
+            if not temporal.in_window(row, query_time):
                 continue
-        elif known is not None and vto is not None and vto > known \
-                and temporal.in_window(row, Tq):
+        elif known is not None and valid_to_parsed is not None and valid_to_parsed > known \
+                and temporal.in_window(row, query_time):
             pass  # current-at-K: memo believed it current then
         else:
             continue
-        V = embeddings.cosine(qemb, emb)
-        T = fts.get(rid, 0.0)  # no-hit T=0, no renormalization (M-002)
-        age = max(0.0, (now - temporal.parse_ts(ca)).total_seconds() / 86400)
+        vector_score = embeddings.cosine(query_embedding, embedding)
+        text_score = fts_hits.get(row_id, 0.0)  # no-hit 0, no renormalization (M-002)
+        age = max(0.0, (now - temporal.parse_ts(created_at)).total_seconds() / 86400)
         scored.append({
-            "key": k, "value": v, "type": t, "score": rank.fuse(V, T, age, stab),
+            "key": key, "value": value, "type": kind, "score": rank.fuse(vector_score, text_score, age, stability),
             "age_days": int(age), "uses": uses + 1,
-            "_stab": stab, "_age": age, "_ua": ua, "_ca": ca, "_st": st})
+            "stab": stability, "age": age, "updated": updated_at, "created": created_at, "status": status})
 
     scored = rank.order(scored)[:limit]
     touch_now = temporal.now_iso()
     with conn:
-        for r in scored:
-            rr = math.exp(-max(0.0, r["_age"]) / r["_stab"])
+        for result in scored:
+            retention = math.exp(-max(0.0, result["age"]) / result["stab"])
             # M-006: superseded rows freeze R (no S growth); M-003 caps.
-            ns = r["_stab"] if r["_st"] != "current" or rr < R_FLOOR else min(
-                r["_stab"] * (1.0 + BETA * rr), S_CAP_X * STABILITY[r["type"]])
+            new_stability = result["stab"] if result["status"] != "current" or retention < R_FLOOR else min(
+                result["stab"] * (1.0 + BETA * retention), S_CAP_X * STABILITY[result["type"]])
             conn.execute(
                 "UPDATE memories SET score=score*1.1, uses=uses+1,"
                 " stability=?, updated_at=? WHERE key=? AND namespace=?",
-                (ns, touch_now, r["key"], namespace))
-            r.pop("_stab"), r.pop("_age"), r.pop("_ua"), r.pop("_ca"), r.pop("_st")
+                (new_stability, touch_now, result["key"], namespace))
+            result.pop("stab"), result.pop("age"), result.pop("updated"), result.pop("created"), result.pop("status")
     return scored
 
 
@@ -298,7 +298,7 @@ def remove(conn: sqlite3.Connection, key: str,
     return {"key": key, "action": "deleted"}
 
 
-# L4 tail (Task 7, additive §8.5/§23): maintenance hook. t0 is captured BEFORE
+# L4 tail (Task 7, additive §8.5/§23): maintenance hook. call_start is captured BEFORE
 # the write so the same-call sweep can never take this call's row (M-024).
 # Logic above untouched; mutating receipts gain `archived` (victim key|None).
 original_save = save
@@ -308,10 +308,10 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
          namespace: str = "default", valid_from=None) -> dict:
     from memo import maintenance
 
-    t0 = temporal.now_iso()
+    call_start = temporal.now_iso()
     receipt = original_save(conn, key, value, type=type, namespace=namespace,
                          valid_from=valid_from)
-    maint = maintenance.run(conn, now=t0)
+    maintenance_result = maintenance.run(conn, now=call_start)
     if receipt.get("action") in ("created", "updated", "superseded"):
-        receipt["archived"] = maint["evicted"]
+        receipt["archived"] = maintenance_result["evicted"]
     return receipt

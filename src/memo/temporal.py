@@ -23,13 +23,13 @@ STOP_WORDS = frozenset(
     "the a an in on of for to uses use using with some also still now as is are was were be been i my me".split())
 
 
-def token_words(s: str) -> set[str]:
-    return {w.lower() for w in re.findall(r"[A-Za-z]+", s)} - STOP_WORDS
+def token_words(text: str) -> set[str]:
+    return {word.lower() for word in re.findall(r"[A-Za-z]+", text)} - STOP_WORDS
 
 
-def has_overlap(a: str, b: str) -> bool:
-    wa, wb = token_words(a), token_words(b)
-    return bool(wa & wb)
+def has_overlap(first: str, second: str) -> bool:
+    first_words, second_words = token_words(first), token_words(second)
+    return bool(first_words & second_words)
 
 
 def classify(old, new_key: str, new_value: str, judge=None) -> str:
@@ -39,13 +39,13 @@ def classify(old, new_key: str, new_value: str, judge=None) -> str:
     judge output falls back to extends + stderr log (never crashes save).
     """
     old_value = old.get("value") if isinstance(old, dict) else str(old)
-    old_s, new_s = old_value or "", new_value or ""
-    if REASSERT_PATTERN.search(new_s):
+    old_text, new_text = old_value or "", new_value or ""
+    if REASSERT_PATTERN.search(new_text):
         return "reasserts"
-    if NEGATION_PATTERN.search(new_s) or NEGATION_PATTERN.search(old_s):
+    if NEGATION_PATTERN.search(new_text) or NEGATION_PATTERN.search(old_text):
         if judge is not None:
             try:
-                verdict = str(judge(old_s, new_key, new_s)).strip().lower()
+                verdict = str(judge(old_text, new_key, new_text)).strip().lower()
             except Exception:
                 verdict = ""
             if verdict in OUTCOMES:
@@ -53,26 +53,26 @@ def classify(old, new_key: str, new_value: str, judge=None) -> str:
             print(f"judge fallback: non-token output {verdict!r} -> extends",
                   file=sys.stderr)
         return "contradicts"
-    if ADDITIVE_PATTERN.search(new_s):
-        return "qualifies" if has_overlap(old_s, new_s) else "unrelated"
+    if ADDITIVE_PATTERN.search(new_text):
+        return "qualifies" if has_overlap(old_text, new_text) else "unrelated"
     return "extends"
 
 
-def coerce_date(s: str) -> str:
-    s = s.strip()
-    if re.fullmatch(r"\d{4}-\d{2}", s):
-        return s + "-01T00:00:00"
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
-        return s + "T00:00:00"
-    return s
+def coerce_date(text: str) -> str:
+    text = text.strip()
+    if re.fullmatch(r"\d{4}-\d{2}", text):
+        return text + "-01T00:00:00"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text + "T00:00:00"
+    return text
 
 
-def parse_ts(s: str) -> datetime.datetime:
+def parse_ts(timestamp: str) -> datetime.datetime:
     """Parse ISO-8601 (date-only coerced to month/day first-day, §32).
 
     Raises ValueError on garbage (caller maps to the internal envelope).
     """
-    dt = datetime.datetime.fromisoformat(coerce_date(s))
+    dt = datetime.datetime.fromisoformat(coerce_date(timestamp))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
     return dt
@@ -87,17 +87,17 @@ def is_effective(row: dict, at: datetime.datetime) -> bool:
     if row.get("status") != "current":
         return False
     try:
-        vf = parse_ts(row["valid_from"])
+        valid_from_dt = parse_ts(row["valid_from"])
     except (ValueError, KeyError, TypeError):
         return False
-    vt = row.get("valid_to")
-    if vt is not None:
+    valid_to_dt = row.get("valid_to")
+    if valid_to_dt is not None:
         try:
-            if parse_ts(vt) <= at:
+            if parse_ts(valid_to_dt) <= at:
                 return False
         except ValueError:
             return False
-    return vf <= at
+    return valid_from_dt <= at
 
 
 def started(row: dict, at: datetime.datetime) -> bool:
@@ -115,17 +115,17 @@ def started(row: dict, at: datetime.datetime) -> bool:
 def in_window(row: dict, at: datetime.datetime) -> bool:
     """Validity window ignoring status (past-window reads with include flag)."""
     try:
-        vf = parse_ts(row["valid_from"])
+        valid_from_dt = parse_ts(row["valid_from"])
     except (ValueError, KeyError, TypeError):
         return False
-    vt = row.get("valid_to")
-    if vt is not None:
+    valid_to_dt = row.get("valid_to")
+    if valid_to_dt is not None:
         try:
-            if parse_ts(vt) <= at:
+            if parse_ts(valid_to_dt) <= at:
                 return False
         except ValueError:
             return False
-    return vf <= at
+    return valid_from_dt <= at
 
 
 def chain_walk(conn: sqlite3.Connection, family_id: str) -> list[dict]:
@@ -135,10 +135,10 @@ def chain_walk(conn: sqlite3.Connection, family_id: str) -> list[dict]:
         " valid_from, valid_to, relation_type, uses, score, created_at,"
         " updated_at FROM memories WHERE family_id=? ORDER BY valid_from",
         (family_id,)).fetchall()
-    cols = ("key", "namespace", "value", "type", "status", "family_id",
-            "superseded_by", "valid_from", "valid_to", "relation_type",
-            "uses", "score", "created_at", "updated_at")
-    return [dict(zip(cols, r)) for r in rows]
+    columns = ("key", "namespace", "value", "type", "status", "family_id",
+               "superseded_by", "valid_from", "valid_to", "relation_type",
+               "uses", "score", "created_at", "updated_at")
+    return [dict(zip(columns, record)) for record in rows]
 
 
 def display_line(row: dict, prev_value: str | None = None) -> str:

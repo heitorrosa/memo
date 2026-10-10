@@ -39,10 +39,10 @@ def touched_after(updated_at: str, t0) -> bool:
         return False
 
 
-def archive_row(conn, key, ns, now_iso, reason):
+def archive_row(conn, key, namespace, now_iso, reason):
     row = conn.execute(
         f"SELECT {ARCHIVE_COLUMNS} FROM memories WHERE key=? AND namespace=?",
-        (key, ns)).fetchone()
+        (key, namespace)).fetchone()
     if row is None:
         return False
     with conn:
@@ -51,22 +51,22 @@ def archive_row(conn, key, ns, now_iso, reason):
             f"archived_reason) VALUES({','.join('?' for _ in range(16))},?,?)",
             (*row, now_iso, reason))
         conn.execute("DELETE FROM memories WHERE key=? AND namespace=?",
-                     (key, ns))
+                     (key, namespace))
     return True
 
 
-def pick_victim(conn, ns, now) -> str | None:
+def pick_victim(conn, namespace, now) -> str | None:
     """argmin (uses/max(age,1))*exp(-age/S) over grace-passing currents."""
-    best, best_e = None, None
-    for key, uses, stab, ca, ua in conn.execute(
+    best, best_energy = None, None
+    for key, uses, stability, created_at, updated_at in conn.execute(
             "SELECT key, uses, stability, created_at, updated_at FROM memories"
-            " WHERE namespace=? AND status='current'", (ns,)):
-        age = age_days(ca, now)
-        if age is None or age < GRACE_DAYS or touched_after(ua, now):
+            " WHERE namespace=? AND status='current'", (namespace,)):
+        age = age_days(created_at, now)
+        if age is None or age < GRACE_DAYS or touched_after(updated_at, now):
             continue
-        e = (uses / max(age, 1.0)) * math.exp(-age / stab)
-        if best_e is None or e < best_e or (e == best_e and (ca, key) < best[1]):
-            best, best_e = (key, (ca, key)), e
+        energy = (uses / max(age, 1.0)) * math.exp(-age / stability)
+        if best_energy is None or energy < best_energy or (energy == best_energy and (created_at, key) < best[1]):
+            best, best_energy = (key, (created_at, key)), energy
     return best[0] if best else None
 
 
@@ -74,7 +74,7 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
         now: str | None = None) -> dict:
     """One bounded pass; idempotent. Returns
     {evicted: key|None, archived: [keys], rolled_up: episodes_created}."""
-    t0 = temporal.parse_ts(now) if now else temporal.parse_ts(
+    sweep_time = temporal.parse_ts(now) if now else temporal.parse_ts(
         temporal.now_iso())
     now_iso = temporal.now_iso()
     evicted, archived, rolled = None, [], 0
@@ -87,23 +87,23 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
         return True
 
     # (1) over-cap loop, per namespace (cap counts current-only, M-006).
-    for (ns,) in conn.execute(
+    for (namespace,) in conn.execute(
             "SELECT DISTINCT namespace FROM memories").fetchall():
         while take():
-            n = conn.execute(
+            count = conn.execute(
                 "SELECT COUNT(*) FROM memories WHERE namespace=?"
-                " AND status='current'", (ns,)).fetchone()[0]
-            if n <= CAP:
+                " AND status='current'", (namespace,)).fetchone()[0]
+            if count <= CAP:
                 moves[0] += 1  # take() only spent when we actually evict
                 break
-            v = pick_victim(conn, ns, t0)
-            if v is None:
+            victim = pick_victim(conn, namespace, sweep_time)
+            if victim is None:
                 moves[0] += 1
                 break  # all grace-guarded: converge on later calls
-            archive_row(conn, v, ns, now_iso, "cap_eviction")
-            archived.append(v)
+            archive_row(conn, victim, namespace, now_iso, "cap_eviction")
+            archived.append(victim)
             if evicted is None:
-                evicted = v
+                evicted = victim
 
     # (2) cron triple-AND sweep; prefs/feedback EXEMPT (M-016).
     if moves[0] > 0:
@@ -111,18 +111,18 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
             "SELECT key, namespace, created_at, updated_at FROM memories"
             " WHERE status='current' AND type IN ('analysis','context')"
             " ORDER BY created_at").fetchall()
-        for key, ns, ca, ua in rows:
+        for key, namespace, created_at, updated_at in rows:
             if moves[0] <= 0:
                 break
-            age = age_days(ca, t0)
-            if age is None or age <= CRON_AGE or touched_after(ua, t0):
+            age = age_days(created_at, sweep_time)
+            if age is None or age <= CRON_AGE or touched_after(updated_at, sweep_time):
                 continue
             score, uses = conn.execute(
                 "SELECT score, uses FROM memories WHERE key=? AND namespace=?",
-                (key, ns)).fetchone()
+                (key, namespace)).fetchone()
             if score < CRON_SCORE and uses == CRON_USES:
                 if take():
-                    archive_row(conn, key, ns, now_iso, "cron")
+                    archive_row(conn, key, namespace, now_iso, "cron")
                     archived.append(key)
 
     # (3) context rollup >30d -> ONE episodes row (mechanical summary).
@@ -131,9 +131,9 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
             "SELECT key, namespace, value, created_at, updated_at FROM memories"
             " WHERE status='current' AND type='context'"
             " ORDER BY created_at").fetchall()
-        due = [(k, ns, v, ca) for k, ns, v, ca, ua in rows
-               if (age_days(ca, t0) or 0) > ROLLUP_AGE
-               and not touched_after(ua, t0)][:moves[0]]
+        due = [(key, namespace, value, created_at) for key, namespace, value, created_at, updated_at in rows
+               if (age_days(created_at, sweep_time) or 0) > ROLLUP_AGE
+               and not touched_after(updated_at, sweep_time)][:moves[0]]
         if due:
             for _ in due:
                 take()
@@ -142,24 +142,24 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
                     "INSERT INTO episodes(summary,source_count,rolled_up_at,"
                     "started_at,ended_at) VALUES(?,?,?,?,?)",
                     ("auto-rollup of %d context rows: " % len(due)
-                     + " | ".join(v[:40] for _, _, v, _ in due),
+                     + " | ".join(value[:40] for _, _, value, _ in due),
                      len(due), now_iso,
-                     min(ca for _, _, _, ca in due),
-                     max(ca for _, _, _, ca in due)))
-                for k, ns, _, _ in due:
-                    archive_row(conn, k, ns, now_iso, "rollup")
-                    archived.append(k)
+                     min(created_at for _, _, _, created_at in due),
+                     max(created_at for _, _, _, created_at in due)))
+                for key, namespace, _, _ in due:
+                    archive_row(conn, key, namespace, now_iso, "rollup")
+                    archived.append(key)
             rolled = 1
 
     # (4) tombstone expiry >30d: drop the row (resurrection window closed).
     if moves[0] > 0:
-        for (name, ua) in conn.execute(
+        for (name, updated_at) in conn.execute(
                 "SELECT name, updated_at FROM skills WHERE source='tombstone'"
                 " ORDER BY updated_at").fetchall():
             if moves[0] <= 0:
                 break
             try:
-                age = max(0.0, (t0 - temporal.parse_ts(ua))
+                age = max(0.0, (sweep_time - temporal.parse_ts(updated_at))
                           .total_seconds() / 86400)
             except ValueError:
                 continue

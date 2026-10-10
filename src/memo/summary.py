@@ -31,32 +31,32 @@ def top_memories_lines(conn: sqlite3.Connection, limit: int = 10) -> list[str]:
         "WHERE status='current' ORDER BY updated_at DESC LIMIT ?", (limit,)
     ).fetchall()
     lines = []
-    for key, typ, value, uses, updated in rows:
-        v = value if len(value) <= 160 else value[:160] + "…"
-        lines.append(f"- [{typ}] {key}: {v} (age {age_days_label(updated)}d · used {uses}x)")
+    for key, memory_type, value, uses, updated_at in rows:
+        shown = value if len(value) <= 160 else value[:160] + "…"
+        lines.append(f"- [{memory_type}] {key}: {shown} (age {age_days_label(updated_at)}d · used {uses}x)")
     return lines
 
 
 def stats_line(conn: sqlite3.Connection) -> str:
-    n = conn.execute(
+    memory_count = conn.execute(
         "SELECT COUNT(*) FROM memories WHERE status='current'").fetchone()[0]
-    k = conn.execute(
+    skill_count = conn.execute(
         "SELECT COUNT(*) FROM skills WHERE source != 'tombstone'").fetchone()[0]
-    return f"Stats: {n}/250 memories · {k} skills · db v3"
+    return f"Stats: {memory_count}/250 memories · {skill_count} skills · db v3"
 
 
 def bootstrap_text(conn: sqlite3.Connection) -> str:
-    mem = top_memories_lines(conn)
-    l0 = skills.l0_index(conn)
+    top_memories = top_memories_lines(conn)
+    skill_index = skills.l0_index(conn)
     parts = [
         "# memo bootstrap — durable memory + skill index "
         "(loaded once per conversation; do not re-fetch what you hold)",
         "## Orientation",
         ORIENTATION,
-        f"## Top memories ({len(mem)})",
-        *(mem or ["(none yet)"]),
-        f"## Skill index ({len(l0)} — full, keep in mind for the whole conversation)",
-        *(l0 or ["(no skills yet)"]),
+        f"## Top memories ({len(top_memories)})",
+        *(top_memories or ["(none yet)"]),
+        f"## Skill index ({len(skill_index)} — full, keep in mind for the whole conversation)",
+        *(skill_index or ["(no skills yet)"]),
         f"## {stats_line(conn)}",
     ]
     return "\n".join(parts)
