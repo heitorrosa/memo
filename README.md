@@ -117,6 +117,7 @@ flowchart TB
 - **OpenCode plugin:** injects memory, syncs skills at session start, and pushes local skill edits after writes.
 - **Maintenance:** evicts low-value memories when over capacity, archives stale context, rolls older context into episode summaries, and expires old tombstones.
 
+!
 ## Configuration
 
 Required:
@@ -138,7 +139,7 @@ Boolean flags also accept `true` or `yes`, case-insensitively. Both domains cann
 - [ ] Graph links for the memories and skills
 - [ ] Skill Janitor
 - [ ] Retrieval gate to force the memory to be read using a System1 Decision model
-- [ ] Manaagement dashboard
+- [ ] Management dashboard
 
 ## License
 
