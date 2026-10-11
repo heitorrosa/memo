@@ -277,7 +277,7 @@ def test_envelopes(tmp_path):
         conn, "github:o/r", "s", fetch=lambda url: (_ for _ in ()).throw(
             RuntimeError("fetch failed: HTTP 404 for x")))
     assert bad == {"error": "internal", "detail": "fetch failed: HTTP 404 for x"}
-    assert do_memory_save(conn, "k", "durable value here", typ="nonsense")["error"] == "internal"
+    assert do_memory_save(conn, "k", "durable value here", typ="nonsense")["error"] == "invalid_input"
     conn.close()
 
 

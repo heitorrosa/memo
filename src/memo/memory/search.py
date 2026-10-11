@@ -22,21 +22,23 @@ from memo.models.orm import Memory as OrmMemory
 def search(conn: sqlite3.Connection, query: str, limit: int = 10,
            namespace: str = "default", valid_at: str = "now",
            as_known_at: str | None = None,
-           include_superseded: bool = False) -> list[dict]:
-    """Returns [{key,value,type,score,age_days,uses}]."""
+           include_superseded: bool = False,
+           type: str | None = None,
+           min_score: float | None = None) -> list[dict]:
+    """Returns [{key,value,type,score,age_days,uses,updated_at}]."""
     if not query or not query.strip():
         return errors.err("empty_query", prompt_store.render("err_empty_query"))
     try:
         anchor_time = temporal.parse_ts(temporal.now_iso() if valid_at == "now" else valid_at)
     except ValueError:
-        return errors.err("internal", prompt_store.render(
+        return errors.err("invalid_input", prompt_store.render(
             "err_valid_at", valid_at=valid_at))
     known = None
     if as_known_at is not None:
         try:
             known = temporal.parse_ts(as_known_at)
         except ValueError:
-            return errors.err("internal", prompt_store.render(
+            return errors.err("invalid_input", prompt_store.render(
                 "err_as_known_at", as_known_at=as_known_at))
     limit = min(max(1, limit), 50)  # silent clamp, no error
 
@@ -45,13 +47,14 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
     # raw: rowid needed for the FTS map; ORM Memory has no rowid field.
     id_rows = conn.execute(
         "SELECT rowid, key, value, type, embedding, stability, score, uses,"
-        " created_at, updated_at, valid_from, valid_to, status, family_id"
+        " created_at, updated_at, valid_from, valid_to, valid_until, status, family_id"
         " FROM memories WHERE namespace=? LIMIT 500", (namespace,)).fetchall()
 
     now = temporal.parse_ts(temporal.now_iso())
     scored = []
-    for row_id, key, value, kind, embedding, stability, score, uses, created_at, updated_at, valid_from, valid_to, status, family_id in id_rows:
-        row = {"status": status, "valid_from": valid_from, "valid_to": valid_to}
+    for row_id, key, value, kind, embedding, stability, score, uses, created_at, updated_at, valid_from, valid_to, valid_until, status, family_id in id_rows:
+        row = {"status": status, "valid_from": valid_from, "valid_to": valid_to,
+               "valid_until": valid_until}
         try:
             valid_to_parsed = temporal.parse_ts(valid_to) if valid_to is not None else None
         except ValueError:
@@ -65,6 +68,9 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
         # Belief axis: an explicit as_known_at evaluates the window as of K
         # unless the caller also pinned a valid_at question (T-then wins).
         query_time = anchor_time if (valid_at != "now" or known is None) else known
+        # TTL: expired facts decay out of ranking at every T (temporal owns it).
+        if temporal.is_expired(row, query_time):
+            continue
         if include_superseded:
             if not temporal.started(row, query_time):
                 continue
@@ -84,6 +90,10 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             "age_days": int(age), "uses": uses + 1,
             "stab": stability, "age": age, "updated": updated_at, "created": created_at, "status": status})
 
+    if type is not None:
+        scored = [result for result in scored if result["type"] == type]
+    if min_score is not None:
+        scored = [result for result in scored if result["score"] >= min_score]
     scored = rank.order(scored)[:limit]
     touch_now = temporal.now_iso()
     peewee_db = memo_db.orm_db(conn)
@@ -97,5 +107,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
                               stability=new_stability, updated_at=touch_now)
              .where((OrmMemory.key == result["key"]) & (OrmMemory.namespace == namespace))
              .execute())
-            result.pop("stab"), result.pop("age"), result.pop("updated"), result.pop("created"), result.pop("status")
+            result.pop("stab"), result.pop("age"), result.pop("status")
+            result.pop("created")
+            result["updated_at"] = result.pop("updated")
     return scored

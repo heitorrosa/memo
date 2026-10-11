@@ -42,6 +42,12 @@ class Memory(BaseMemoryModel):
     updated_at = TextField()
     valid_from = TextField()
     valid_to = TextField(null=True)
+    # User-set TTL: a fact past valid_until decays out of ranking. NULL =
+    # no expiry. Distinct from valid_to, which the supersede chain owns.
+    valid_until = TextField(null=True)
+    # Writer stamp: agent_id of the last writer (Agent model key, nullable;
+    # no FK constraint so memory writes never fail on identity plumbing).
+    agent_id = TextField(null=True)
     status = TextField(
         default="current", constraints=[SQL("DEFAULT 'current'")]
     )
@@ -88,6 +94,8 @@ class ArchivedMemory(BaseMemoryModel):
     updated_at = TextField(null=True)
     valid_from = TextField(null=True)
     valid_to = TextField(null=True)
+    valid_until = TextField(null=True)
+    agent_id = TextField(null=True)
     status = TextField(null=True)
     family_id = TextField(null=True)
     superseded_by = TextField(null=True)

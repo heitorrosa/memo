@@ -59,7 +59,8 @@ def archive_row(conn, key, namespace, now_iso, reason):
             type=row.type, embedding=embedding, stability=row.stability,
             score=row.score, uses=row.uses, created_at=row.created_at,
             updated_at=row.updated_at, valid_from=row.valid_from,
-            valid_to=row.valid_to, status=row.status,
+            valid_to=row.valid_to, valid_until=row.valid_until,
+            agent_id=row.agent_id, status=row.status,
             family_id=row.family_id, superseded_by=row.superseded_by,
             relation_type=row.relation_type,
             archived_at=now_iso, archived_reason=reason)

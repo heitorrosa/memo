@@ -19,7 +19,8 @@ from memo.skills.sync import sync
 
 def do_memory_search(conn, query, limit=10, namespace="default",
                      valid_at="now", as_known_at=None,
-                     include_superseded=False, lock=None):
+                     include_superseded=False, lock=None,
+                     type=None, min_score=None):
     start = time.perf_counter()
     try:
         if lock is not None:
@@ -27,11 +28,13 @@ def do_memory_search(conn, query, limit=10, namespace="default",
                 out = search(conn, query, limit=limit,
                              namespace=namespace, valid_at=valid_at,
                              as_known_at=as_known_at,
-                             include_superseded=include_superseded)
+                             include_superseded=include_superseded,
+                             type=type, min_score=min_score)
         else:
             out = search(conn, query, limit=limit, namespace=namespace,
                          valid_at=valid_at, as_known_at=as_known_at,
-                         include_superseded=include_superseded)
+                         include_superseded=include_superseded,
+                         type=type, min_score=min_score)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
         return internal_error(exc)
     row_count = len(out) if isinstance(out, list) else 0
@@ -41,16 +44,19 @@ def do_memory_search(conn, query, limit=10, namespace="default",
 
 
 def do_memory_save(conn, key, value, typ="context", namespace="default",
-                   valid_from=None, lock=None):
+                   valid_from=None, lock=None, valid_until=None,
+                   agent_id=None):
     start = time.perf_counter()
     try:
         if lock is not None:
             with lock:
                 out = save(conn, key, value, type=typ,
-                           namespace=namespace, valid_from=valid_from)
+                           namespace=namespace, valid_from=valid_from,
+                           valid_until=valid_until, agent_id=agent_id)
         else:
             out = save(conn, key, value, type=typ, namespace=namespace,
-                       valid_from=valid_from)
+                       valid_from=valid_from, valid_until=valid_until,
+                       agent_id=agent_id)
     except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
         return internal_error(exc)
     log_operation("memory_save", namespace, (time.perf_counter() - start) * 1000, 1,

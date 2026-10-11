@@ -289,12 +289,19 @@ def test_sync_prompt_teaches_self_evaluation():
 
 
 def test_sync_prompt_names_no_longer_route():
-    # The migration note states names no longer route; the receipt shapes
-    # (mode/fields/offset) are unchanged.
+    # The migration note lives in code, not the prompt (#2): routing is
+    # stated name-agnostically, and the legacy list survives only as a
+    # comment on the routing block in sync.py. Receipt shapes unchanged.
+    import pathlib
+
+    import memo.skills.sync as sync_mod
     text = prompt_store.render("tool_skill_sync")
-    assert "opencode, claude-code, filesystem" in text  # migration note
+    assert "opencode, claude-code, filesystem" not in text
     assert "no longer route" in text
     assert "declaration" in text and "skill_create, file_write" not in text
+    assert "capabilities" in text
+    source = pathlib.Path(sync_mod.__file__).read_text(encoding="utf-8")
+    assert "opencode, claude-code, filesystem, web" in source
     assert "files_to_write (path, content, hash)" in text
     assert "files_to_delete (path)" in text
     assert "offset, total" in text
@@ -337,3 +344,26 @@ def test_emitted_hash_is_normalized(tmp_path):
     w = files_delta(conn)["files_to_write"][0]
     assert w["hash"] == hash_body_normalized("body text\n")
     conn.close()
+
+
+def test_web_bundle_has_memories(tmp_path):
+    # Bundle mode carries the top-memories section (fixes-01): heading +
+    # lines when memories exist, the empty marker when none do.
+    from memo import embeddings
+    from memo.memory.save import save
+    embeddings.force_fallback = True
+    try:
+        conn = mem(tmp_path)
+        put_skill(conn, "qol-deploy", desc="Ship the Vite app.")
+        empty = sync(conn, "web")
+        assert empty["mode"] == "bundle"
+        assert "Top memories (0)" in empty["bootstrap_md"]
+        assert "(none yet)" in empty["bootstrap_md"]
+        save(conn, "context.home", "lives in Campinas for the atlas project")
+        full = sync(conn, "web")
+        assert "Top memories (1)" in full["bootstrap_md"]
+        assert "context.home" in full["bootstrap_md"]
+        assert "qol-deploy" in full["bootstrap_md"]
+        conn.close()
+    finally:
+        embeddings.force_fallback = False

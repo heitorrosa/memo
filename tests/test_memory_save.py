@@ -143,3 +143,99 @@ def test_oversize_accepted(tmp_path):
     assert any("4KB" in str(w.message) or "large" in str(w.message).lower() for w in caught)
     assert len(fetch_row(conn, "big.note")[1]) > 10_000
     conn.close()
+
+
+# --- save validation: hard structure rejects, style advisories (fixes-01) ---
+
+def test_bad_type_rejected_invalid_input(tmp_path):
+    from memo.memory.save import original_save
+    conn = mem(tmp_path)
+    r = original_save(conn, "context.note", "durable fact here", type="nonsense")
+    assert r == {"error": "invalid_input", "detail": "bad type 'nonsense'"}
+    assert count(conn) == 0
+    conn.close()
+
+
+def test_type_prefix_mismatch_rejected(tmp_path):
+    # A dotted prefix that itself names a type must equal type.
+    conn = mem(tmp_path)
+    r = save(conn, "preference.theme", "durable fact here", type="context")
+    assert r["error"] == "invalid_input"
+    assert "preference" in r["detail"] and "context" in r["detail"]
+    assert count(conn) == 0
+    conn.close()
+
+
+def test_legacy_dotted_prefix_allowed(tmp_path):
+    # Transition: a dotted prefix naming no type stays writable, so
+    # existing rows (editor.*, correction.*, ...) remain updatable.
+    conn = mem(tmp_path)
+    assert save(conn, "editor.indent", "prefers tabs")["action"] == "created"
+    assert save(conn, "correction.tip", "durable feedback note",
+                type="feedback")["action"] == "created"
+    conn.close()
+
+
+def test_dotless_natural_title_advisory(tmp_path):
+    conn = mem(tmp_path)
+    r = save(conn, "meeting notes", "durable atlas fact about standup")
+    assert r["action"] == "created"
+    assert "natural_title" in r.get("suggestion", "")
+    conn.close()
+
+
+def test_date_in_key_advisory(tmp_path):
+    conn = mem(tmp_path)
+    r = save(conn, "context.review-2026-10", "durable atlas fact about review")
+    assert r["action"] == "created"
+    assert "date_in_key" in r.get("suggestion", "")
+    conn.close()
+
+
+def test_value_date_prefix_advisory(tmp_path):
+    conn = mem(tmp_path)
+    r = save(conn, "context.launch", "[2026-10-01] durable atlas launch note")
+    assert r["action"] == "created"
+    assert "value_date_prefix" in r.get("suggestion", "")
+    conn.close()
+
+
+def test_combined_advisories_join_with_too_dense(tmp_path):
+    # Style notes join with '; '; the tail appends too_dense, never overwrites.
+    conn = mem(tmp_path)
+    r = save(conn, "Review 2026-10", "x" * 600)
+    assert r["action"] == "created"
+    suggestion = r.get("suggestion", "")
+    assert "natural_title" in suggestion
+    assert "date_in_key" in suggestion
+    assert "too_dense" in suggestion
+    conn.close()
+
+
+def test_do_memory_save_forwards_agent_id(tmp_path):
+    # Tools-layer threading: agent_id stamps, omitted preserves (fixes-01 #2).
+    from memo.server.operations import do_memory_save
+    conn = mem(tmp_path)
+    writer = "a1" * 16
+    r = do_memory_save(conn, "context.note", "durable writer note alpha",
+                       agent_id=writer)
+    assert r["action"] == "created"
+    row = conn.execute(
+        "SELECT agent_id FROM memories WHERE key='context.note'").fetchone()
+    assert row[0] == writer
+    r2 = do_memory_save(conn, "context.note", "durable writer note beta")
+    assert r2["action"] == "updated"
+    row = conn.execute(
+        "SELECT agent_id FROM memories WHERE key='context.note'").fetchone()
+    assert row[0] == writer
+    conn.close()
+
+
+def test_do_memory_save_bad_type_is_invalid_input(tmp_path):
+    # Validation code, never internal: bad type surfaces invalid_input.
+    from memo.server.operations import do_memory_save
+    conn = mem(tmp_path)
+    assert do_memory_save(conn, "k", "durable value here", typ="nonsense") == {
+        "error": "invalid_input", "detail": "bad type 'nonsense'"}
+    assert count(conn) == 0
+    conn.close()

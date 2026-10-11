@@ -100,6 +100,22 @@ def is_effective(row: dict, at: datetime.datetime) -> bool:
     return valid_from_dt <= at
 
 
+def is_expired(row: dict, at: datetime.datetime) -> bool:
+    """User-set TTL: valid_until present AND <= T means decayed out of ranking.
+
+    NULL/missing/unparseable valid_until never expires (lenient, like the
+    other predicates). Boundary follows is_effective: valid_until == T counts
+    as expired, mirroring valid_to <= T ending validity.
+    """
+    valid_until = row.get("valid_until")
+    if not valid_until:
+        return False
+    try:
+        return parse_ts(valid_until) <= at
+    except ValueError:
+        return False
+
+
 def started(row: dict, at: datetime.datetime) -> bool:
     """History view (include_superseded): row had started by T.
 
@@ -133,11 +149,11 @@ def chain_walk(conn: sqlite3.Connection, family_id: str) -> list[dict]:
     # raw: temporal stays ORM-free per import rule §37 — predicate-adjacent read.
     rows = conn.execute(
         "SELECT key, namespace, value, type, status, family_id, superseded_by,"
-        " valid_from, valid_to, relation_type, uses, score, created_at,"
+        " valid_from, valid_to, valid_until, agent_id, relation_type, uses, score, created_at,"
         " updated_at FROM memories WHERE family_id=? ORDER BY valid_from",
         (family_id,)).fetchall()
     columns = ("key", "namespace", "value", "type", "status", "family_id",
-               "superseded_by", "valid_from", "valid_to", "relation_type",
+               "superseded_by", "valid_from", "valid_to", "valid_until", "agent_id", "relation_type",
                "uses", "score", "created_at", "updated_at")
     return [dict(zip(columns, record)) for record in rows]
 

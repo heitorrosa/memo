@@ -17,6 +17,9 @@ from memo.models.orm import MemoryFTS
 STABILITY = {"preference": 14.0, "feedback": 10.0, "analysis": 7.0, "context": 3.0}
 BETA, R_FLOOR, S_CAP_X = 0.3, 0.05, 4.0
 FUZZ_HIT = 80
+# Soft density guidance: values past this MANY chars carry a too_dense
+# suggestion to split (advisory only — the write still lands, same receipt).
+DENSITY_GUIDE_CHARS = 500
 
 ACK_PHRASES = frozenset({
     "hi", "hello", "hey", "thanks", "thank you", "bye", "goodbye", "ok",
@@ -49,6 +52,7 @@ def fetch_row(conn, key, namespace):
         "score": row.score, "uses": row.uses,
         "created_at": row.created_at, "updated_at": row.updated_at,
         "valid_from": row.valid_from, "valid_to": row.valid_to,
+        "valid_until": row.valid_until, "agent_id": row.agent_id,
         "status": row.status, "family_id": row.family_id,
         "superseded_by": row.superseded_by,
         "relation_type": row.relation_type,

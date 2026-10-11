@@ -4,6 +4,7 @@ from __future__ import annotations
 
 ENVELOPE_CODES = (
     "empty_query",
+    "invalid_input",
     "not_found",
     "trivia_rejected",
     "cap_evicted",

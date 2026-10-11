@@ -20,7 +20,10 @@ from memo.skills.crud import build_frontmatter, hash_body_normalized, l0_line
 # Routing is by the agent's DECLARED persist verdict, never by name: any
 # non-empty capabilities declaration yields a file delta; every other caller
 # (undeclared, bare legacy names, unknown) gets the L0 bundle. No harness or
-# tool name is ever consulted.
+# tool name is ever consulted. Migration note (kept out of the prompt):
+# legacy bare names (opencode, claude-code, filesystem, web) no longer route;
+# they arrive as harness labels only, and an undeclared call of any name gets
+# the L0 bundle.
 PAGE_SIZE = 10
 PAGE_BYTES = 30 * 1024
 WEB_TRUNCATE_SKILLS = 150
@@ -196,6 +199,9 @@ def rank_filter(live: list[tuple], filter_text: str) -> list[tuple]:
 
 def sync_web(conn: sqlite3.Connection, filter_text: str | None,
               offset: int, limit: int | None) -> dict:
+    # Deferred: memo.summary imports ORIENTATION from this module, so a
+    # top-level import would cycle. Same section shape as bootstrap_text.
+    from memo.summary import top_memories_lines
     live = live_rows(conn)
     total = len(live)
     full_chars = sum(len(skill[0]) + len(skill[1]) for skill in live)
@@ -214,8 +220,13 @@ def sync_web(conn: sqlite3.Connection, filter_text: str | None,
             if not truncated else
             prompt_store.render("web_index_truncated_heading",
                                 total=total, shown=len(page)))
+    memories = top_memories_lines(conn)
+    memories_section = (
+        prompt_store.render("top_memories_heading", count=len(memories))
+        + "\n" + "\n".join(memories or [prompt_store.render("empty_memories")]))
     return {"mode": "bundle",
-            "bootstrap_md": ORIENTATION + "\n" + head + "\n" + "\n".join(lines),
+            "bootstrap_md": ORIENTATION + "\n" + memories_section + "\n"
+            + head + "\n" + "\n".join(lines),
             "truncated": truncated, "total": total}
 
 

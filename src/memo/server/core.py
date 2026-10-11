@@ -67,16 +67,21 @@ def build_server(db_path: str, memory_on: bool | None = None,
         def memory_search(query: str, limit: int = 10,
                           namespace: str = "default", valid_at: str = "now",
                           as_known_at: str | None = None,
-                          include_superseded: bool = False) -> list | dict:
+                          include_superseded: bool = False,
+                          type: str | None = None,
+                          min_score: float | None = None) -> list | dict:
             return do_memory_search(conn, query, limit, namespace, valid_at,
-                                    as_known_at, include_superseded, lock)
+                                    as_known_at, include_superseded, lock,
+                                    type, min_score)
 
         @server.tool(name="memory_save", description=DESCRIPTIONS["memory_save"])
         def memory_save(key: str, value: str, type: str = "context",
                         namespace: str = "default",
-                        valid_from: str | None = None) -> dict:
+                        valid_from: str | None = None,
+                        valid_until: str | None = None,
+                        agent_id: str | None = None) -> dict:
             return do_memory_save(conn, key, value, type, namespace,
-                                  valid_from, lock)
+                                  valid_from, lock, valid_until, agent_id)
 
         @server.tool(name="memory_delete", description=DESCRIPTIONS["memory_delete"])
         def memory_delete(key: str,

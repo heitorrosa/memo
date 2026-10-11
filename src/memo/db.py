@@ -36,6 +36,37 @@ def create_agents(migrator) -> None:
         migrator.database.create_tables(models, safe=True)
 
 
+def ensure_memory_columns(conn: sqlite3.Connection) -> None:
+    """memories_schema_2: nullable valid_until (TTL) + agent_id (writer stamp)
+    on memories + archived_memories, DDL on conn itself (NOT via playhouse).
+
+    ALTERs issued on the migrator's separate connection fail: they wait out
+    the 5s busy-timeout against the write txn migrate() holds on conn, then
+    raise OperationalError. Same-connection DDL before that txn opens is
+    safe. Guarded per table/column: fresh and :memory: DBs already carry
+    them, so the op is a key-record-only no-op there.
+    """
+    if conn.execute(
+        "SELECT 1 FROM memo_meta WHERE k='memories_schema_2'"
+    ).fetchone():
+        return
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    with conn:
+        for table in ("memories", "archived_memories"):
+            if table not in tables:
+                continue
+            cols = {row[1] for row in
+                    conn.execute(f"PRAGMA table_info({table})")}
+            if "valid_until" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN valid_until TEXT")
+            if "agent_id" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN agent_id TEXT")
+        conn.execute(
+            "INSERT INTO memo_meta(k,v) VALUES('memories_schema_2','applied')")
+
+
 # (domain, version, op): op(migrator) applies structural alterations via
 # playhouse.migrate (recorded under f"{domain}_schema_{version}").
 MIGRATIONS: list = [("agents", 1, create_agents)]
@@ -98,6 +129,22 @@ def atomic():
     return peewee_database.atomic()
 
 
+def rebuild_fts(conn: sqlite3.Connection) -> None:
+    """Re-index external-content FTS over pre-existing rows.
+
+    Rows inserted before the FTS table/triggers existed are invisible to
+    MATCH and, worse, the au-trigger 'delete' on an unindexed rowid raises
+    SQLITE_CORRUPT (malformed) on their first UPDATE. Rebuild after the tail
+    is idempotent and cheap at the 250-row cap; fresh DBs rebuild an empty
+    index (no-op).
+    """
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table'"
+        " AND name='memories_fts'"
+    ).fetchone():
+        conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
+
+
 def migrator():
     """SqliteMigrator bound to the ORM database (structured migrations)."""
     return SqliteMigrator(peewee_database)
@@ -147,12 +194,16 @@ def migrate(conn: sqlite3.Connection) -> int:
         peewee_db = orm_db(conn)
         with peewee_db.bind_ctx(orm_models.CREATE_MODELS):
             peewee_db.create_tables(orm_models.CREATE_MODELS, safe=True)
+        ensure_memory_columns(conn)
     else:
         with conn:
             conn.executescript(_render())
+            ensure_memory_columns(conn)
+            rebuild_fts(conn)
             return seed(conn)
     with conn:
         conn.executescript(orm_models.RAW_TAIL)
+        rebuild_fts(conn)
         return seed(conn)
 
 
