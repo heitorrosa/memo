@@ -50,9 +50,9 @@ Add Memo as a remote MCP server in `opencode.json`:
 
 For remote clients, replace the URL with a reachable HTTPS endpoint and keep authentication enabled. See [`opencode-memo/README.md`](opencode-memo/README.md) for plugin setup and sync behavior. Harnesses without remote MCP support can use the `skill_sync` bundle and `bootstrap` prompt as a fallback.
 
-### Harness system prompt
+### Configuring for Web
 
-Anyone wiring a harness (OpenCode, a chatbot, or another agent) should paste the contents of [`INSTRUCTIONS.md`](INSTRUCTIONS.md) into the harness system prompt or instructions field. It is the client-side memory routine: search at the start, save durable facts while working, and save outcomes at the end. Clients that cannot set headers, such as ChatGPT custom MCP, authenticate with the `?access_token=<token>` URL form from Configuration; clients with header support use `Authorization: Bearer <token>`.
+Anyone wiring a web harness (ChatGPT, Claude.ai) should paste the contents of [`INSTRUCTIONS.md`](INSTRUCTIONS.md) into the harness system prompt or instructions field. It is the client-side memory routine: search at the start, save durable facts while working, and save outcomes at the end. Clients that cannot set headers, such as ChatGPT custom MCP, authenticate with the `?access_token=<token>` URL form from Configuration; clients with header support use `Authorization: Bearer <token>`.
 
 ## Tools
 
