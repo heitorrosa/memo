@@ -6,6 +6,7 @@ __pycache__/
 .venv-gate/
 .env
 models/
+.memo-sync.json
 build/
 *.egg-info/
 data/
