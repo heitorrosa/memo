@@ -1,5 +1,3 @@
-"""Task 1 tests: unified memo.db schema + migrations + FTS triggers (spec §§5-6)."""
-
 from memo import db
 
 
@@ -52,7 +50,6 @@ def test_unified_schema(tmp_path):
         conn.execute("SELECT v FROM memo_meta WHERE k='schema_version'").fetchone()[0]
         == "3"
     )
-    # Second migrate is a no-op returning the same version.
     assert db.migrate(conn) == 3
     assert db.MEMO_SCHEMA_VERSION == 3
     conn.close()

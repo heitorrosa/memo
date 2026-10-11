@@ -1,11 +1,3 @@
-"""Memory read path §14: embed→FTS→fuse→temporal BEFORE rank→filter→order→
-slice→touch-once.
-
-Peewee-backed: FTS via MemoryFTS, touch UPDATEs via the ORM Memory model;
-the 500-row scan stays raw SQL (ORM Memory exposes no rowid field and the
-FTS score map is keyed by rowid — ORM cannot cover it). Cosine/fuse/order/
-temporal predicates untouched.
-"""
 from __future__ import annotations
 
 import math
@@ -25,7 +17,6 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
            include_superseded: bool = False,
            type: str | None = None,
            min_score: float | None = None) -> list[dict]:
-    """Returns [{key,value,type,score,age_days,uses,updated_at}]."""
     if not query or not query.strip():
         return errors.err("empty_query", prompt_store.render("err_empty_query"))
     try:
@@ -40,11 +31,10 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
         except ValueError:
             return errors.err("invalid_input", prompt_store.render(
                 "err_as_known_at", as_known_at=as_known_at))
-    limit = min(max(1, limit), 50)  # silent clamp, no error
+    limit = min(max(1, limit), 50)
 
     query_embedding = embeddings.embed([query])[0]
     fts_hits = fts_scores(conn, query)
-    # raw: rowid needed for the FTS map; ORM Memory has no rowid field.
     id_rows = conn.execute(
         "SELECT rowid, key, value, type, embedding, stability, score, uses,"
         " created_at, updated_at, valid_from, valid_to, valid_until, status, family_id"
@@ -65,10 +55,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
                     continue
             except ValueError:
                 continue
-        # Belief axis: an explicit as_known_at evaluates the window as of K
-        # unless the caller also pinned a valid_at question (T-then wins).
         query_time = anchor_time if (valid_at != "now" or known is None) else known
-        # TTL: expired facts decay out of ranking at every T (temporal owns it).
         if temporal.is_expired(row, query_time):
             continue
         if include_superseded:
@@ -79,11 +66,11 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
                 continue
         elif known is not None and valid_to_parsed is not None and valid_to_parsed > known \
                 and temporal.in_window(row, query_time):
-            pass  # current-at-K: memo believed it current then
+            pass
         else:
             continue
         vector_score = embeddings.cosine(query_embedding, embedding)
-        text_score = fts_hits.get(row_id, 0.0)  # no-hit 0, no renormalization (M-002)
+        text_score = fts_hits.get(row_id, 0.0)
         age = max(0.0, (now - temporal.parse_ts(created_at)).total_seconds() / 86400)
         scored.append({
             "key": key, "value": value, "type": kind, "score": rank.fuse(vector_score, text_score, age, stability),
@@ -100,7 +87,6 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
     with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         for result in scored:
             retention = math.exp(-max(0.0, result["age"]) / result["stab"])
-            # M-006: superseded rows freeze R (no S growth); M-003 caps.
             new_stability = result["stab"] if result["status"] != "current" or retention < R_FLOOR else min(
                 result["stab"] * (1.0 + BETA * retention), S_CAP_X * STABILITY[result["type"]])
             (OrmMemory.update(score=OrmMemory.score * 1.1, uses=OrmMemory.uses + 1,

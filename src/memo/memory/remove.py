@@ -1,8 +1,3 @@
-"""Memory soft-delete ONLY (§15, M-004): row → archived_memories, family kept.
-
-Peewee-backed: fetch via ORM fetch_row, archive INSERT + DELETE via the
-ORM ArchivedMemory/Memory models in one atomic move.
-"""
 from __future__ import annotations
 
 import sqlite3

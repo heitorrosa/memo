@@ -1,12 +1,3 @@
-"""Bounded janitor (spec §§16-17,23). Runs at the END of memory.save /
-skills.sync tails; scheduler-daily hits the same function (no 2nd path).
-
-Peewee-backed: moves go through the ORM Memory/ArchivedMemory/Episode/
-Skill models bound to conn's own file (db.orm_db); energy math, grace,
-vetoes, budgets, and the signal-only log are untouched. ORM imports live
-at top level (no cycle: db/models never import maintenance, and the
-save/sync tails import this module, never the reverse).
-"""
 from __future__ import annotations
 
 import math
@@ -22,7 +13,7 @@ from memo.models.orm import Episode as OrmEpisode
 from memo.models.orm import Memory as OrmMemory
 from memo.models.orm import Skill as OrmSkill
 
-CAP = 250
+CAP = 2000
 GRACE_DAYS = 1.0
 CRON_SCORE, CRON_USES, CRON_AGE = 0.1, 0, 90.0
 ROLLUP_AGE, TOMBSTONE_AGE = 30.0, 30.0
@@ -37,7 +28,6 @@ def age_days(created_at: str, now) -> float | None:
 
 
 def touched_after(updated_at: str, t0) -> bool:
-    """M-024: rows touched in the current call are never swept by it."""
     try:
         return temporal.parse_ts(updated_at) >= t0
     except ValueError:
@@ -71,7 +61,6 @@ def archive_row(conn, key, namespace, now_iso, reason):
 
 
 def pick_victim(conn, namespace, now) -> str | None:
-    """argmin (uses/max(age,1))*exp(-age/S) over grace-passing currents."""
     with memo_db.orm_ctx(conn):
         rows = list((OrmMemory.select(
             OrmMemory.key, OrmMemory.uses, OrmMemory.stability,
@@ -91,13 +80,11 @@ def pick_victim(conn, namespace, now) -> str | None:
 
 def run(conn: sqlite3.Connection, max_moves: int = 5,
         now: str | None = None) -> dict:
-    """One bounded pass; idempotent. Returns
-    {evicted: key|None, archived: [keys], rolled_up: episodes_created}."""
     sweep_time = temporal.parse_ts(now) if now else temporal.parse_ts(
         temporal.now_iso())
     now_iso = temporal.now_iso()
     evicted, archived, rolled = None, [], 0
-    moves = [max_moves]  # mutable budget shared across steps, oldest-first
+    moves = [max_moves]
 
     def take() -> bool:
         if moves[0] <= 0:
@@ -106,7 +93,6 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
         return True
 
     peewee_db = memo_db.orm_db(conn)
-    # (1) over-cap loop, per namespace (cap counts current-only, M-006).
     with memo_db.orm_ctx(conn):
         namespaces = [row.namespace for row in
                       OrmMemory.select(OrmMemory.namespace).distinct()]
@@ -117,18 +103,17 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
                          .where((OrmMemory.namespace == namespace)
                                 & (OrmMemory.status == "current")).count())
             if count <= CAP:
-                moves[0] += 1  # take() only spent when we actually evict
+                moves[0] += 1
                 break
             victim = pick_victim(conn, namespace, sweep_time)
             if victim is None:
                 moves[0] += 1
-                break  # all grace-guarded: converge on later calls
+                break
             archive_row(conn, victim, namespace, now_iso, "cap_eviction")
             archived.append(victim)
             if evicted is None:
                 evicted = victim
 
-    # (2) cron triple-AND sweep; prefs/feedback EXEMPT (M-016).
     if moves[0] > 0:
         with memo_db.orm_ctx(conn):
             rows = list((OrmMemory.select(
@@ -148,7 +133,6 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
                     archive_row(conn, key, namespace, now_iso, "cron")
                     archived.append(key)
 
-    # (3) context rollup >30d -> ONE episodes row (mechanical summary).
     if moves[0] > 0:
         with memo_db.orm_ctx(conn):
             rows = list((OrmMemory.select(
@@ -175,7 +159,6 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
                 archived.append(key)
             rolled = 1
 
-    # (4) tombstone expiry >30d: drop the row (resurrection window closed).
     if moves[0] > 0:
         with memo_db.orm_ctx(conn):
             tombs = list((OrmSkill.select(OrmSkill.name, OrmSkill.updated_at)
@@ -193,8 +176,6 @@ def run(conn: sqlite3.Connection, max_moves: int = 5,
                 with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
                     (OrmSkill.delete().where(OrmSkill.name == name).execute())
 
-    # ponytail: silent no-op runs; signal-only log keeps T-1..T-8 replay
-    # readable (500+ saves) while preserving the per-action audit line.
     if (evicted or archived or rolled) or os.getenv("MEMO_LOG") == "debug":
         print(f"maint evicted={1 if evicted else 0} archived={len(archived)}"
               f" rolled={rolled}", file=sys.stderr)

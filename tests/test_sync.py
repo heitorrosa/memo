@@ -1,17 +1,8 @@
-"""Task 6 tests: skill_sync dual-mode + L0 join (spec §§20-21).
-
-Routing is by the agent's DECLARED persist verdict, never by name: a non-empty
-capabilities declaration yields a file delta; every other caller (undeclared,
-bare legacy names, unknown) gets the L0 bundle.
-"""
-
 from memo import db
 from memo.skills.crud import get, l0_index, put, tombstone
 from memo.skills.sync import sync
 from memo import prompts as prompt_store
 
-# The declaration is an abstract verdict: any non-empty value means "I can
-# persist". The server never inspects harness or tool names.
 CAN_PERSIST = ["persist"]
 
 
@@ -26,7 +17,6 @@ def put_skill(conn, name, body="body", desc=None):
 
 
 def files_delta(conn, **kw):
-    """Declared-persistence sync: file mode. The harness name is irrelevant."""
     return sync(conn, "opencode", capabilities=CAN_PERSIST, **kw)
 
 
@@ -35,8 +25,6 @@ def known_list(entries):
 
 
 def test_empty_converges(tmp_path):
-    # T-3/T-6: cold client (known omitted) gets full materialization with
-    # frontmatter; echoing hashes back converges to empty deltas (M-021).
     conn = mem(tmp_path)
     put_skill(conn, "b-skill", body="# b")
     put_skill(conn, "a-skill", body="# a")
@@ -46,7 +34,7 @@ def test_empty_converges(tmp_path):
     assert [w["path"] for w in first["files_to_write"]] == [
         "skills/a-skill/SKILL.md",
         "skills/b-skill/SKILL.md",
-    ]  # name asc, never insertion order (M-014)
+    ]
     assert first["files_to_write"][0]["content"].startswith(
         "---\nname: a-skill\ndescription:"
     )
@@ -58,7 +46,7 @@ def test_empty_converges(tmp_path):
     second = files_delta(conn, known=known)
     assert second["files_to_write"] == [] and second["files_to_delete"] == []
     assert second["total"] == 2
-    third = files_delta(conn, known=known)  # idempotent repeat
+    third = files_delta(conn, known=known)
     assert third["files_to_write"] == [] and third["files_to_delete"] == []
     conn.close()
 
@@ -80,10 +68,9 @@ def test_delete_surfaces_once(tmp_path):
     r = files_delta(conn, known=known_list([("gone", h)]))
     assert [d["path"] for d in r["files_to_delete"]] == ["skills/gone/SKILL.md"]
     assert r["files_to_write"] == []
-    assert r["total"] == 0  # tombstones are not live skills
-    again = files_delta(conn, known=[])  # client applied the delete
+    assert r["total"] == 0
+    again = files_delta(conn, known=[])
     assert again["files_to_delete"] == [] and again["files_to_write"] == []
-    # Unknown-to-server names the client lists also surface as deletes.
     phantom = files_delta(conn, known=known_list([("phantom", "0" * 64)]))
     assert [d["path"] for d in phantom["files_to_delete"]] == [
         "skills/phantom/SKILL.md"
@@ -92,8 +79,6 @@ def test_delete_surfaces_once(tmp_path):
 
 
 def test_stale_known_resends_delete(tmp_path):
-    # F-12: a client that keeps offering the deleted name re-gets the delete
-    # until the tombstone expires; the body is never resurrected.
     conn = mem(tmp_path)
     h = put_skill(conn, "gone")["hash"]
     tombstone(conn, "gone")
@@ -122,13 +107,12 @@ def test_pagination_cap(tmp_path):
         seen += [w["path"] for w in p["files_to_write"]]
         offset += len(p["files_to_write"])
         assert offset <= 25
-    assert len(seen) == 25 and len(set(seen)) == 25  # walked all, no dupes
-    assert seen == sorted(seen)  # deterministic name-asc order across pages
+    assert len(seen) == 25 and len(set(seen)) == 25
+    assert seen == sorted(seen)
     conn.close()
 
 
 def test_pagination_oversize_single(tmp_path):
-    # One skill over 30KB still makes progress: a page holds >= 1 entry.
     conn = mem(tmp_path)
     put_skill(conn, "big", body="x" * 40000)
     put_skill(conn, "small", body="y")
@@ -154,14 +138,13 @@ def test_web_bundle_has_l0(tmp_path):
 
 
 def test_web_truncation(tmp_path):
-    # F-10/M-023: 200 skills -> truncated bundle + filter narrows.
     conn = mem(tmp_path)
     for i in range(200):
         put_skill(conn, f"skill-{i:03d}", desc=f"generic helper number {i}.")
     put_skill(conn, "deploy-ship", desc="Ship the Vite app: build, preview-check, publish.")
     b = sync(conn, "web")
     assert b["truncated"] is True and b["total"] == 201
-    assert "skill-000" in b["bootstrap_md"]  # name-asc slice, L0 only
+    assert "skill-000" in b["bootstrap_md"]
     f = sync(conn, "web", filter="deploy ship vite")
     assert "deploy-ship" in f["bootstrap_md"]
     assert "skill-000" not in f["bootstrap_md"]
@@ -193,7 +176,6 @@ def test_l0_name_asc(tmp_path):
 
 
 def test_undeclared_bundle_by_default(tmp_path):
-    # Undeclared call (any name, legacy or unknown) is NOT an error: bundle.
     conn = mem(tmp_path)
     put_skill(conn, "qol-deploy", desc="Ship the Vite app.")
     for name in ("carrier-pigeon", "opencode", "web"):
@@ -204,8 +186,6 @@ def test_undeclared_bundle_by_default(tmp_path):
 
 
 def test_declared_persist_gets_deltas(tmp_path):
-    # The declaration decides, not the harness name: any non-empty declaration
-    # (whatever its labels) yields a file delta.
     conn = mem(tmp_path)
     put_skill(conn, "qol-deploy", desc="Ship the Vite app.")
     for name in ("opencode", "web", "some-future-harness"):
@@ -219,7 +199,6 @@ def test_declared_persist_gets_deltas(tmp_path):
 
 
 def test_empty_declaration_gets_bundle(tmp_path):
-    # An empty declaration (None or []) declares no persistence -> bundle.
     conn = mem(tmp_path)
     put_skill(conn, "qol-deploy", desc="Ship the Vite app.")
     assert sync(conn, "opencode", capabilities=[])["mode"] == "bundle"
@@ -228,7 +207,6 @@ def test_empty_declaration_gets_bundle(tmp_path):
 
 
 def test_bare_legacy_names_no_longer_route(tmp_path):
-    # Regression pin: bare names that once meant "files" now mean nothing.
     conn = mem(tmp_path)
     put_skill(conn, "qol-deploy", desc="Ship the Vite app.")
     for name in ("opencode", "claude-code", "filesystem", "web"):
@@ -237,8 +215,6 @@ def test_bare_legacy_names_no_longer_route(tmp_path):
 
 
 def test_harness_names_never_influence_routing(tmp_path):
-    # Harness names that once routed (opencode/claude-code/filesystem) or never
-    # did (aliens) are treated identically: the declaration governs, not the name.
     conn = mem(tmp_path)
     put_skill(conn, "qol-deploy", desc="Ship the Vite app.")
     for alien in ("totally-alien", "claude-code", "filesystem", "opencode", "web"):
@@ -249,8 +225,6 @@ def test_harness_names_never_influence_routing(tmp_path):
 
 
 def test_capability_labels_are_never_matched(tmp_path):
-    # Capability labels are opaque: tool names and junk alike flip the mode only
-    # by being present, never by their value. Only emptiness decides.
     conn = mem(tmp_path)
     put_skill(conn, "qol-deploy", desc="Ship the Vite app.")
     for label in ("skill_create", "file_write", "SKILL_CREATE", "whatever",
@@ -264,13 +238,11 @@ def test_capability_labels_are_never_matched(tmp_path):
 def test_malformed_harness_not_found(tmp_path):
     conn = mem(tmp_path)
     assert sync(conn, "")["error"] == "not_found"
-    assert sync(conn, None)["error"] == "not_found"  # type: ignore[arg-type]
+    assert sync(conn, None)["error"] == "not_found"
     conn.close()
 
 
 def test_sync_prompt_teaches_self_evaluation():
-    # The decision surface is the agent judging its OWN persistence, then
-    # mapping that verdict to a declaration -- not a name lookup.
     text = prompt_store.render("tool_skill_sync")
     for needle in (
         "SELF-EVALUATION",
@@ -289,9 +261,6 @@ def test_sync_prompt_teaches_self_evaluation():
 
 
 def test_sync_prompt_names_no_longer_route():
-    # The migration note lives in code, not the prompt (#2): routing is
-    # stated name-agnostically, and the legacy list survives only as a
-    # comment on the routing block in sync.py. Receipt shapes unchanged.
     import pathlib
 
     import memo.skills.sync as sync_mod
@@ -310,7 +279,6 @@ def test_sync_prompt_names_no_longer_route():
 
 
 def test_sync_prompt_documents_hash_recipe():
-    # Hash hardening (B1): the exact recipe is agent-visible in the sync prompt.
     text = prompt_store.render("tool_skill_sync")
     assert "sha256-hex" in text
     assert "frontmatter block removed" in text
@@ -319,16 +287,13 @@ def test_sync_prompt_documents_hash_recipe():
 
 
 def test_trailing_whitespace_no_churn(tmp_path):
-    # Hash hardening (B2): a stored body and a client body differing only by
-    # surrounding whitespace must NOT emit a delta. Without normalization the
-    # hand-edited trailing newline churns a re-download every sync.
     from memo.skills.crud import hash_body_normalized
     conn = mem(tmp_path)
-    put_skill(conn, "s", body="body text\n")   # server body ends in a newline
-    put_skill(conn, "t", body="clean body")    # server body has no newline
+    put_skill(conn, "s", body="body text\n")
+    put_skill(conn, "t", body="clean body")
     known = known_list([
-        ("s", hash_body_normalized("body text")),    # client: no newline
-        ("t", hash_body_normalized("clean body\n")),  # client: gained a newline
+        ("s", hash_body_normalized("body text")),
+        ("t", hash_body_normalized("clean body\n")),
     ])
     r = files_delta(conn, known=known)
     assert r["files_to_write"] == [] and r["files_to_delete"] == []
@@ -336,8 +301,6 @@ def test_trailing_whitespace_no_churn(tmp_path):
 
 
 def test_emitted_hash_is_normalized(tmp_path):
-    # The delta echoes the normalized hash, so the client's snapshot stores a
-    # value that survives a trailing-newline edit without a re-download.
     from memo.skills.crud import hash_body_normalized
     conn = mem(tmp_path)
     put_skill(conn, "s", body="body text\n")
@@ -347,8 +310,6 @@ def test_emitted_hash_is_normalized(tmp_path):
 
 
 def test_web_bundle_has_memories(tmp_path):
-    # Bundle mode carries the top-memories section (fixes-01): heading +
-    # lines when memories exist, the empty marker when none do.
     from memo import embeddings
     from memo.memory.save import save
     embeddings.force_fallback = True

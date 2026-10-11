@@ -1,8 +1,3 @@
-"""Task 8 e2e: plugin round-trips + enforcement texts (spec §§25-26, T-1..T-8).
-
-Runs against HTTP (the deployed path), not just in-process calls.
-TDD RED: opencode-memo/* does not exist yet; server pieces assumed green.
-"""
 import threading
 
 import pytest
@@ -15,7 +10,6 @@ from memo.server.http import build_http_app
 from memo.skills.crud import get, put
 from memo.skills.sync import sync
 
-# Non-empty persist declaration -> file delta; names never matched server-side.
 CAN_PERSIST = ["persist"]
 
 
@@ -71,7 +65,6 @@ def seed(conn):
 
 
 def test_cold_session_injects(tmp_path):
-    """T-1: cold open returns summary with memories + L0 + stats; 2nd sync empty."""
     conn = mem(tmp_path)
     seed(conn)
     text = summary.bootstrap_text(conn)
@@ -88,12 +81,10 @@ def test_cold_session_injects(tmp_path):
 
 
 def test_skill_end_to_end(tmp_path):
-    """T-3: put -> delta materializes file -> get returns the runnable body."""
     conn = mem(tmp_path)
     r = put(conn, "qol-deploy", "Ship the Vite app: build, preview-check, publish.",
                    "# QoL deploy\nrun build, preview, publish.")
     assert r["version"] == 1
-    # after-hook equal-body no-op converges silently
     r2 = put(conn, "qol-deploy", "Ship the Vite app: build, preview-check, publish.",
                     "# QoL deploy\nrun build, preview, publish.")
     assert r2 == r
@@ -102,7 +93,7 @@ def test_skill_end_to_end(tmp_path):
     body = get(conn, "qol-deploy")["body"]
     assert "preview" in body
     web = sync(conn, "web")
-    assert "qol-deploy" in web["bootstrap_md"]  # bundle reflects it next call
+    assert "qol-deploy" in web["bootstrap_md"]
     conn.close()
 
 
@@ -117,7 +108,6 @@ def test_web_bundle_reflects_skill(tmp_path):
 
 
 def test_single_truth_direction(tmp_path):
-    """Row beats file, always: stale client content never overwrites the row."""
     conn = mem(tmp_path)
     put(conn, "qol-deploy", "Ship desc.", "canonical row body v1")
     stale_known = [{"name": "qol-deploy", "hash": "0" * 64}]
@@ -129,17 +119,15 @@ def test_single_truth_direction(tmp_path):
 
 
 def test_session_survives_dead_db(tmp_path, capsys):
-    """F-03/M-026: dead container -> warn + stale, session never raises."""
     assert health_probe("http://127.0.0.1:9/health") == 1
     assert "FAIL" in capsys.readouterr().err
-    conn = mem(tmp_path)  # stale local snapshot still renders
+    conn = mem(tmp_path)
     assert "(none yet)" in summary.bootstrap_text(conn)
     assert main(["--db", str(tmp_path / "m.db"), "--dump-tools"]) == 0
     conn.close()
 
 
 def test_http_skill_sync_roundtrip(tmp_path):
-    """Deployed-path proof: skill_sync over real HTTP through bearer auth."""
     import asyncio
 
     from mcp import ClientSession
@@ -149,7 +137,7 @@ def test_http_skill_sync_roundtrip(tmp_path):
     put(conn, "qol-deploy", "Ship desc.", "body here")
     conn.close()
 
-    async def _sync():
+    async def sync():
         async with streamablehttp_client(
                 "http://127.0.0.1:18091/mcp",
                 headers={"Authorization": "Bearer t"}) as (rd, wr, _):
@@ -161,7 +149,7 @@ def test_http_skill_sync_roundtrip(tmp_path):
 
     srv, th = serve(dbp, 18091)
     try:
-        res = asyncio.run(_sync())
+        res = asyncio.run(sync())
         assert "qol-deploy" in res.content[0].text
     finally:
         srv.should_exit = True

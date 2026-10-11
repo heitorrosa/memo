@@ -1,10 +1,3 @@
-"""Bootstrap summary: orientation + top memories + L0 skill index (spec §22).
-
-L3 filled the {skills_l0} join; the memory half (top_memories_lines ranking)
-is refined by the memory lane (Task 4) — current shape is updated_at-ordered
-and embed-free so this module needs no memory.py import.
-"""
-
 from __future__ import annotations
 
 import datetime

@@ -1,8 +1,3 @@
-"""Temporal classify + predicates + chain walk (spec §§9, 11, 32).
-
-Import rule (§37): never imports skills/memory — pure logic + read queries.
-"""
-
 from __future__ import annotations
 
 import datetime
@@ -33,11 +28,6 @@ def has_overlap(first: str, second: str) -> bool:
 
 
 def classify(old, new_key: str, new_value: str, judge=None) -> str:
-    """Cheap-first 5-way classify. `old` is a row dict or a value string.
-
-    Judge fires ONLY on the narrow negation path (M-009); a non-token
-    judge output falls back to extends + stderr log (never crashes save).
-    """
     old_value = old.get("value") if isinstance(old, dict) else str(old)
     old_text, new_text = old_value or "", new_value or ""
     if REASSERT_PATTERN.search(new_text):
@@ -68,10 +58,6 @@ def coerce_date(text: str) -> str:
 
 
 def parse_ts(timestamp: str) -> datetime.datetime:
-    """Parse ISO-8601 (date-only coerced to month/day first-day, §32).
-
-    Raises ValueError on garbage (caller maps to the internal envelope).
-    """
     dt = datetime.datetime.fromisoformat(coerce_date(timestamp))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
@@ -83,7 +69,6 @@ def now_iso() -> str:
 
 
 def is_effective(row: dict, at: datetime.datetime) -> bool:
-    """status=current AND valid_from<=T AND (valid_to NULL OR >T) (§11)."""
     if row.get("status") != "current":
         return False
     try:
@@ -101,12 +86,6 @@ def is_effective(row: dict, at: datetime.datetime) -> bool:
 
 
 def is_expired(row: dict, at: datetime.datetime) -> bool:
-    """User-set TTL: valid_until present AND <= T means decayed out of ranking.
-
-    NULL/missing/unparseable valid_until never expires (lenient, like the
-    other predicates). Boundary follows is_effective: valid_until == T counts
-    as expired, mirroring valid_to <= T ending validity.
-    """
     valid_until = row.get("valid_until")
     if not valid_until:
         return False
@@ -117,11 +96,6 @@ def is_expired(row: dict, at: datetime.datetime) -> bool:
 
 
 def started(row: dict, at: datetime.datetime) -> bool:
-    """History view (include_superseded): row had started by T.
-
-    The upper bound is dropped — history shows the whole chain behind the
-    topic (§11 table: include at now returns B + A flagged).
-    """
     try:
         return parse_ts(row["valid_from"]) <= at
     except (ValueError, KeyError, TypeError):
@@ -129,7 +103,6 @@ def started(row: dict, at: datetime.datetime) -> bool:
 
 
 def in_window(row: dict, at: datetime.datetime) -> bool:
-    """Validity window ignoring status (past-window reads with include flag)."""
     try:
         valid_from_dt = parse_ts(row["valid_from"])
     except (ValueError, KeyError, TypeError):
@@ -145,8 +118,6 @@ def in_window(row: dict, at: datetime.datetime) -> bool:
 
 
 def chain_walk(conn: sqlite3.Connection, family_id: str) -> list[dict]:
-    """Oldest-first rows of one family (forward links, indexed, terminates)."""
-    # raw: temporal stays ORM-free per import rule §37 — predicate-adjacent read.
     rows = conn.execute(
         "SELECT key, namespace, value, type, status, family_id, superseded_by,"
         " valid_from, valid_to, valid_until, agent_id, relation_type, uses, score, created_at,"
@@ -159,7 +130,6 @@ def chain_walk(conn: sqlite3.Connection, family_id: str) -> list[dict]:
 
 
 def display_line(row: dict, prev_value: str | None = None) -> str:
-    """One-line injection format (§14): current + since + predecessor."""
     since = str(row.get("valid_from", ""))[:10]
     if row.get("status") == "current":
         tail = f"(current, since {since}; previously {prev_value[:60]})" if prev_value \

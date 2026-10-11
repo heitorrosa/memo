@@ -1,9 +1,3 @@
-"""Memory writes: 5-step save ladder + L4 maintenance tail (§8 order IS semantics).
-
-Peewee-backed: reads/writes go through the ORM Memory model bound to
-conn's own file (db.orm_db); the fuzzy loop, temporal classify, BLOB
-embeddings, receipts, and tail order are untouched.
-"""
 from __future__ import annotations
 
 import re
@@ -33,11 +27,6 @@ VALUE_DATE_PREFIX_PATTERN = re.compile(r"\[\d{4}-\d{2}-\d{2}\]")
 
 
 def style_suggestion(key: str, value: str) -> str | None:
-    """Style advisories: the fact stores as-given, suggestion only.
-
-    Never a rejection — mirrors the too_dense tail pattern (one suggestion
-    string per receipt, multiple notes joined with '; ').
-    """
     notes = []
     if key != key.lower() or any(ch.isspace() for ch in key):
         notes.append(
@@ -55,19 +44,6 @@ def style_suggestion(key: str, value: str) -> str | None:
 def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
          namespace: str = "default", valid_from=None, valid_until=None,
          agent_id=None) -> dict:
-    """5-step ladder (§8 order IS semantics). Receipts: created|updated|
-    superseded|rejected_trivia (archived wired by L4).
-
-    valid_until is a user-set TTL (ISO-8601, coerced like valid_from);
-    garbage means no expiry, never an error. agent_id stamps the writer on
-    every mutating path; an omitted (None) stamp preserves the old one.
-
-    Structure validates fail-fast (invalid_input, nothing stored): an unknown
-    type, or a dotted prefix that itself names a type but mismatches it
-    (preference.x saved as context). Dotted legacy prefixes (editor.*) and
-    dotless natural titles stay writable through the transition so existing
-    rows remain updatable. Style is advisory (suggestion on the receipt).
-    """
     if type not in STABILITY:
         return errors.err("invalid_input", f"bad type {type!r}")
     prefix = key.split(".")[0] if "." in key else None
@@ -98,15 +74,12 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
             effective_valid_until = None
     else:
         effective_valid_until = None
-    # Writer stamp + expiry refresh for UPDATE paths: present-only, so an
-    # omitted argument preserves what the row already carries.
     stamp = {"agent_id": agent_id} if agent_id is not None else {}
     refresh_expiry = {"valid_until": effective_valid_until} if valid_until is not None else {}
 
     peewee_db = memo_db.orm_db(conn)
     old = fetch_row(conn, key, namespace)
     if old is not None:
-        # Step 1: exact-key hit = UPDATE, never supersede (§8.1).
         value_embedding = embeddings.embed([value])[0]
         age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(old["created_at"])).total_seconds() / 86400)
         with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
@@ -120,7 +93,6 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
              .execute())
         return with_advisory({"key": key, "action": "updated"})
 
-    # Step 2: fuzzy scan (current rows, same namespace; superseded excluded).
     with memo_db.orm_ctx(conn):
         candidates = list((OrmMemory.select(OrmMemory.key, OrmMemory.value)
                            .where((OrmMemory.namespace == namespace)
@@ -136,7 +108,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
         hit_row = fetch_row(conn, hit_key, namespace)
         outcome = temporal.classify(hit_value, key, value)
         if outcome == "unrelated":
-            pass  # fall through to insert (NEW family)
+            pass
         elif outcome == "qualifies":
             family_id = hit_row["family_id"]
             value_embedding = embeddings.embed([value])[0]
@@ -181,7 +153,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     status="current", family_id=hit_row["family_id"],
                     superseded_by=None, relation_type=relation)
             return with_advisory({"key": key, "action": "superseded"})
-        else:  # reasserts: touch SAME row, new valid_from, never a new row
+        else:
             age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(hit_row["created_at"])).total_seconds() / 86400)
             with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
                 (OrmMemory.update(
@@ -194,11 +166,9 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                  .execute())
             return with_advisory({"key": hit_key, "action": "updated"})
 
-    # Step 3: durability gate (§10) — reject trivia, SUCCESS shape, 0 rows.
     if is_trivia(value):
         return {"key": key, "action": "rejected_trivia"}
 
-    # Step 4: insert (family=uuid4hex, valid_from unclamped — may be future).
     value_embedding = embeddings.embed([value])[0]
     with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         OrmMemory.create(
@@ -212,11 +182,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
     return with_advisory({"key": key, "action": "created"})
 
 
-# L4 tail (Task 7, additive §8.5/§23): maintenance hook. call_start is captured
-# BEFORE the write so the same-call sweep can never take this call's row
-# (M-024). Logic above untouched; mutating receipts gain `archived`
-# (victim key|None).
-def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",  # noqa: F811 — tail wraps the ladder above
+def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
          namespace: str = "default", valid_from=None, valid_until=None,
          agent_id=None) -> dict:
     call_start = temporal.now_iso()
@@ -228,9 +194,6 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context", 
     maintenance_result = maintenance.run(conn, now=call_start)
     if receipt.get("action") in ("created", "updated", "superseded"):
         receipt["archived"] = maintenance_result["evicted"]
-        # Density is advisory, never a rejection: a past-guide value still
-        # lands, with a suggestion to split it across saves. Appends when
-        # the ladder already attached a style suggestion.
         if len(value) > DENSITY_GUIDE_CHARS:
             dense = "too_dense: split this into smaller facts with separate saves"
             if receipt.get("suggestion"):

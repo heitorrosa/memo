@@ -1,5 +1,3 @@
-"""Task 5 tests: skills put/get/update/install + tombstone (spec §§18-19)."""
-
 import hashlib
 
 from memo import db
@@ -36,7 +34,7 @@ def test_put_idempotent(tmp_path):
     conn = mem(tmp_path)
     a = put(conn, "s", "d", "same body")
     b = put(conn, "s", "d", "same body")
-    assert b == a  # identical body: no version bump (misunderstanding #8)
+    assert b == a
     assert get(conn, "s")["version"] == 1
     conn.close()
 
@@ -56,7 +54,7 @@ def test_update_appends_revision(tmp_path):
     r = update(conn, "s", "prefer pnpm over npm")
     assert r["version"] == 2 and r["hash"] == sha(get(conn, "s")["body"])
     body = get(conn, "s")["body"]
-    assert body.startswith("base body")  # history never rewritten
+    assert body.startswith("base body")
     assert "## Revision v2" in body and "prefer pnpm over npm" in body
     old = get(conn, "s", version=1)
     assert old["body"] == "base body" and old["version"] == 1
@@ -72,13 +70,11 @@ def test_get_miss(tmp_path):
 
 
 def test_concurrent_loser_preserved(tmp_path):
-    # M-019: two writers on the same base version -> last wins, loser kept
-    # as an appended `## Revision vN (superseded, ...)` section, never lost.
     conn = mem(tmp_path)
     put(conn, "s", "d", "v1")
     a = put(conn, "s", "d", "A-body", base_version=1)
     assert a["version"] == 2
-    b = put(conn, "s", "d", "B-body", base_version=1)  # stale base
+    b = put(conn, "s", "d", "B-body", base_version=1)
     assert b["version"] == 3
     body = get(conn, "s")["body"]
     assert body.startswith("B-body")
@@ -91,11 +87,11 @@ def test_tombstone(tmp_path):
     put(conn, "s", "d", "body")
     t = tombstone(conn, "s")
     assert t["source"] == "tombstone"
-    assert get(conn, "s")["error"] == "not_found"  # deleted: invisible
+    assert get(conn, "s")["error"] == "not_found"
     assert l0_index(conn) == []
     assert update(conn, "s", "x")["error"] == "not_found"
     assert tombstone(conn, "ghost")["error"] == "not_found"
-    r = put(conn, "s", "d", "body v2")  # Q-04: resurrect, counter continues
+    r = put(conn, "s", "d", "body v2")
     assert r["version"] == 2
     assert get(conn, "s")["body"] == "body v2"
     conn.close()
@@ -131,7 +127,7 @@ def test_install_validates_frontmatter(tmp_path):
     assert r["files_to_write"][0]["path"] == "skills/pytest-fast/SKILL.md"
 
     sh = install(conn, "skills.sh/acme", "pytest-fast", fetch=fetch)
-    assert sh["version"] == 1  # identical body: idempotent, no bump
+    assert sh["version"] == 1
 
     m = install(conn, "github:acme/dotfiles", "other-name", fetch=fetch)
     assert m["error"] == "not_found" and "mismatch" in m["detail"]
@@ -140,7 +136,7 @@ def test_install_validates_frontmatter(tmp_path):
         conn, "github:acme/dotfiles", "x", fetch=lambda url: "no frontmatter here"
     )
     assert bad["error"] == "not_found"
-    assert get(conn, "x").get("error") == "not_found"  # no row written
+    assert get(conn, "x").get("error") == "not_found"
 
     nodesc = install(
         conn,
@@ -154,7 +150,6 @@ def test_install_validates_frontmatter(tmp_path):
 
 
 def test_install_fetch_404(tmp_path):
-    # F-04: fetch failure -> isError, no row, no delta.
     conn = mem(tmp_path)
 
     def fetch(url):

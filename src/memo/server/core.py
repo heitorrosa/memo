@@ -1,4 +1,3 @@
-"""Server build: connection, FastMCP tool registration, tool listing."""
 from __future__ import annotations
 
 import asyncio
@@ -25,9 +24,6 @@ from memo.server.shared import resolve_domains
 
 
 def server_connect(path: str) -> sqlite3.Connection:
-    # Same shape as db.connect + check_same_thread=False: the HTTP layer
-    # serves tools from worker threads behind one lock (single writer).
-    # raw: connection setup + PRAGMAs — ORM binds to this file after.
     conn = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -58,8 +54,8 @@ def build_server(db_path: str, memory_on: bool | None = None,
     conn = server_connect(db_path)
     lock = threading.Lock()
     server = FastMCP("memo")
-    server.memo_conn, server.memo_lock = conn, lock  # noqa: ATTR-defined
-    server.memo_db_path, server.memo_mem_on, server.memo_skills_on = (  # noqa: ATTR-defined
+    server.memo_conn, server.memo_lock = conn, lock
+    server.memo_db_path, server.memo_mem_on, server.memo_skills_on = (
         db_path, memory_on, skills_on)
 
     if memory_on:

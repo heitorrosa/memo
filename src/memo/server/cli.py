@@ -1,4 +1,3 @@
-"""CLI: argparse, health probe, backup, stdio/HTTP entry points."""
 from __future__ import annotations
 
 import argparse
@@ -30,14 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def refuse_if_locked(path: str) -> bool:
-    """Best-effort single-writer guard (M-032): refuse a DB another process
-    holds a write lock on, and point at the container instead."""
     if path == ":memory:":
         return False
     try:
-        probe = sqlite3.connect(path, timeout=1.0)  # raw: lock probe is connection-level, ORM has no equivalent
+        probe = sqlite3.connect(path, timeout=1.0)
         try:
-            probe.execute("BEGIN IMMEDIATE")  # raw: write-lock probe, ORM cannot express
+            probe.execute("BEGIN IMMEDIATE")
             probe.execute("ROLLBACK")
             return False
         except sqlite3.OperationalError:
@@ -52,7 +49,7 @@ def health_probe(url: str) -> int:
     try:
         response = httpx.get(url, timeout=10.0)
         healthy = response.status_code == 200 and response.json().get("ok") is True
-    except Exception as exc:  # noqa: BLE001 — CLI boundary
+    except Exception as exc:
         print(f"memo health FAIL {url}: {exc}", file=sys.stderr)
         return 1
     print(f"memo health {'OK' if healthy else 'FAIL'} {url}")
@@ -60,7 +57,6 @@ def health_probe(url: str) -> int:
 
 
 def backup_database(db_path: str, destination: str) -> int:
-    # raw: sqlite3 backup API is file-level, not CRUD — ORM cannot cover it.
     source_conn = sqlite3.connect(db_path, timeout=10.0)
     try:
         destination_conn = sqlite3.connect(destination)
@@ -110,7 +106,7 @@ def main_http(argv: list[str] | None = None) -> int:
     token = os.getenv("MEMO_TOKEN", "")
     if not token:
         print("memo: MEMO_TOKEN required for --http", file=sys.stderr)
-        return 2  # M-033
+        return 2
     if not args.db:
         print("memo: --db <path> is required", file=sys.stderr)
         return 2
@@ -124,8 +120,6 @@ def main_http(argv: list[str] | None = None) -> int:
         return 2
     server = build_server(args.db, memory_on, skills_on)
     print(startup_line(args.db, db.HAS_VEC, memory_on, skills_on), file=sys.stderr)
-    # access_log=False: a token may arrive as ?access_token= and uvicorn's
-    # access log prints the full path+query. Off by policy, not just by level.
     uvicorn.run(build_http_app(server, token), host=args.host, port=args.port,
                 log_level="warning", access_log=False)
     return 0

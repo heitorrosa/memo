@@ -1,4 +1,3 @@
-"""Central LLM-facing prompt store (text lives in prompts.json)."""
 from __future__ import annotations
 
 import json
@@ -14,9 +13,4 @@ PROMPTS = load_prompts()
 
 
 def render(prompt_key: str, **fields) -> str:
-    """Fill one stored prompt's {placeholders}. Unknown key/field raises.
-
-    The parameter is named prompt_key (not key) so it can never collide
-    with a {key} placeholder in the store's templates.
-    """
     return PROMPTS[prompt_key].format(**fields)

@@ -1,4 +1,3 @@
-"""Bootstrap text (flag-aware)."""
 from __future__ import annotations
 
 from memo import summary

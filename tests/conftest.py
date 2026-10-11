@@ -1,8 +1,3 @@
-"""Peewee test-database pattern: every test gets its own tmp-file DB via
-db.connect (which binds the deferred ORM database to that file), and this
-autouse fixture closes Peewee handles afterwards so simultaneous-DB tests
-(e.g. replay T-6 s2.db) never fight and file handles never leak.
-"""
 import pytest
 
 

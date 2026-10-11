@@ -1,4 +1,3 @@
-"""Regenerate the committed schema.sql artifact from memo.models."""
 import pathlib
 
 from memo.models.orm import render_schema

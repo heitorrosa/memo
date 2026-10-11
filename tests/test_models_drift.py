@@ -1,5 +1,3 @@
-"""Drift guard (Task 5): committed schema.sql is generated from memo.models,
-plus ORM models match the migrated schema (peewee lane)."""
 import pathlib
 
 import memo.models
@@ -14,8 +12,6 @@ def test_committed_schema_matches_generated():
 
 
 def test_orm_models_match_migrated_schema(tmp_path):
-    """Model-vs-migrated-schema: every ORM model exposes exactly the columns
-    migrate() creates (name sets; nullability lives in DDL, not Python)."""
     from memo import db
     from memo.models import orm
 
@@ -35,12 +31,9 @@ def test_orm_models_match_migrated_schema(tmp_path):
         assert orm.MemoryFTS._meta.options == {"content": "memories", "content_rowid": "rowid"}
         fts_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE name='memories_fts'").fetchone()[0]
-        # sqlite normalizes content='memories' to content=memories in storage.
         assert "content=memories" in fts_sql.replace("'", "") and "content_rowid=rowid" in fts_sql
         indexes = {row[0] for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index'")}
-        # Peewee-canonical index names (auto-generated table_col1_col2;
-        # pre-migration idx_memories_* names persist only on old DB files).
         assert {"memory_family_id_valid_from", "memory_status_namespace"} <= indexes
     finally:
         conn.close()

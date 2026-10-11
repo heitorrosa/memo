@@ -1,4 +1,3 @@
-"""Skills install: fetch SKILL.md raw, validate frontmatter, store like put."""
 from __future__ import annotations
 
 import sqlite3
@@ -28,7 +27,7 @@ def split_frontmatter(text: str) -> tuple[dict | None, str]:
 def default_fetch(url: str) -> str:
     try:
         response = httpx.get(url, timeout=15.0, follow_redirects=True)
-    except Exception as error:  # network down/timeout -> internal, no row (F-04)
+    except Exception as error:
         first = str(error).splitlines()[0] if str(error) else type(error).__name__
         raise RuntimeError(f"fetch failed: {first}")
     if response.status_code != 200:
@@ -38,9 +37,6 @@ def default_fetch(url: str) -> str:
 
 def install(conn: sqlite3.Connection, repository: str, skill_name: str,
             fetch=None) -> dict:
-    """Fetch SKILL.md raw, validate frontmatter, then behave EXACTLY like put
-    (plus a files_to_write delta so file harnesses materialize immediately).
-    fetch(url)->str is injectable; tests MUST mock it (M-020, no live net)."""
     fetch = fetch or default_fetch
     if repository.startswith("skills.sh/"):
         slug = repository[len("skills.sh/"):]
@@ -61,7 +57,7 @@ def install(conn: sqlite3.Connection, repository: str, skill_name: str,
             "err_unknown_repo", repository=repository))
     try:
         text = fetch(url)
-    except Exception as error:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as error:
         first = str(error).splitlines()[0] if str(error) else type(error).__name__
         detail = first if first.startswith("fetch failed") else prompt_store.render(
             "err_fetch_failed", first=first)

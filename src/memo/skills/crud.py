@@ -1,9 +1,3 @@
-"""Skills CRUD: put/get/update/tombstone + L0 index (spec §§18-19).
-
-Peewee-backed: queries go through memo.models.orm Skill (bound by
-db.connect to the same file); transactions via db.atomic(). Shapes and
-receipts byte-identical to the raw-SQL version.
-"""
 from __future__ import annotations
 
 import datetime
@@ -28,13 +22,6 @@ def hash_body(body: str) -> str:
 
 
 def hash_body_normalized(body: str) -> str:
-    """Comparison/echo hash: surrounding whitespace is trimmed BEFORE hashing.
-
-    A hand-edited file that merely gained a trailing newline must not look
-    dirty and churn a re-download every sync, so sync compares and echoes this
-    hash instead of the raw one. Stored bodies and their ``hash`` column are
-    never mutated — only the compared/echoed value is normalized.
-    """
     return hashlib.sha256(body.strip().encode("utf-8")).hexdigest()
 
 
@@ -57,14 +44,6 @@ def build_frontmatter(name: str, description: str, version: int, body: str) -> s
 
 def put(conn: sqlite3.Connection, name: str, description: str, body: str,
         source: str = "local", base_version: int | None = None) -> dict:
-    """Upsert a skill. Identical body -> no-op (no version bump, #8).
-
-    base_version pins M-019: when set and != current version, the write wins
-    but the loser's body is preserved as an appended
-    `## Revision vN (superseded, <date>)` section, never lost.
-    Re-put of a tombstoned name resurrects it, continuing the counter (Q-04).
-    Full-body rewrites go through put, NOT update (#9).
-    """
     now = utc_now()
     body_hash = hash_body(body)
     peewee_db = memo_db.orm_db(conn)
@@ -103,7 +82,6 @@ def put(conn: sqlite3.Connection, name: str, description: str, body: str,
 
 
 def split_revisions(body: str) -> tuple[str, list[str]]:
-    """Split an append-only body into (base, [revision sections])."""
     chunks, current = [], []
     for line in body.split("\n"):
         if line.startswith("## Revision v") and (not current or current == [""]):
@@ -120,8 +98,6 @@ def split_revisions(body: str) -> tuple[str, list[str]]:
 
 
 def get(conn: sqlite3.Connection, name: str, version: int | None = None) -> dict:
-    """Fetch a skill. version pins an old revision (rebuilt from the
-    append-only base + revision sections); tombstoned/missing -> not_found."""
     with memo_db.orm_ctx(conn):
         row = Skill.get_or_none(Skill.name == name)
     if row is None or row.source == "tombstone":
@@ -136,15 +112,12 @@ def get(conn: sqlite3.Connection, name: str, version: int | None = None) -> dict
         return errors.err("not_found", prompt_store.render(
             "err_skill_no_version", name=name, version=version))
     base, sections = split_revisions(body)
-    # NOTE: pins are exact only within the current put generation; a later
-    # full-rewrite put resets the base while the counter continues.
     old_body = base if version == 1 else (base + "\n\n" + "\n\n".join(sections[:version - 1]))
     return {"name": name, "description": description, "body": old_body,
             "hash": hash_body(old_body), "version": version}
 
 
 def update(conn: sqlite3.Connection, name: str, patch: str) -> dict:
-    """Append a `## Revision vN (<date>)` section; never rewrites history."""
     peewee_db = memo_db.orm_db(conn)
     with peewee_db.bind_ctx(orm_models.MODELS):
         row = Skill.get_or_none(Skill.name == name)
@@ -162,8 +135,6 @@ def update(conn: sqlite3.Connection, name: str, patch: str) -> dict:
 
 
 def tombstone(conn: sqlite3.Connection, name: str) -> dict:
-    """Soft-delete: keep the row + body 30d (maintenance drops it), surfaced
-    to file harnesses via sync files_to_delete. Idempotent."""
     peewee_db = memo_db.orm_db(conn)
     with peewee_db.bind_ctx(orm_models.MODELS):
         row = Skill.get_or_none(Skill.name == name)
@@ -179,7 +150,6 @@ def tombstone(conn: sqlite3.Connection, name: str) -> dict:
 
 
 def l0_index(conn: sqlite3.Connection) -> list[str]:
-    """L0 index lines, name asc — never insertion order (M-014)."""
     with memo_db.orm_ctx(conn):
         rows = list((Skill.select(Skill.name, Skill.description)
                      .where(Skill.source != "tombstone")

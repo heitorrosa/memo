@@ -1,4 +1,3 @@
-"""Skills sync dual-mode + L0 bundle (spec §§20-21) + L4 janitor tail (§23)."""
 from __future__ import annotations
 
 import datetime
@@ -47,7 +46,6 @@ def tombstoned(conn: sqlite3.Connection) -> set[str]:
 
 
 def known_from_state(conn: sqlite3.Connection, agent_id: str) -> list[dict]:
-    """Stored per-skill snapshot -> known[] for id-only callers (no known[])."""
     with memo_db.orm_ctx(conn):
         rows = list(AgentState.select(AgentState.skill, AgentState.hash)
                     .where(AgentState.agent == agent_id).tuples())
@@ -55,12 +53,6 @@ def known_from_state(conn: sqlite3.Connection, agent_id: str) -> list[dict]:
 
 
 def skill_snapshot(conn: sqlite3.Connection) -> dict:
-    """Every skill row -> {name: {hash, version, updated_at}}.
-
-    Live rows store the NORMALIZED body hash — the value sync echoes — so a
-    snapshot-filled known[] converges to an empty delta; tombstones keep the
-    stored hash (name presence alone drives the delete, F-12).
-    """
     with memo_db.orm_ctx(conn):
         rows = list(Skill.select(
             Skill.name, Skill.body, Skill.skill_hash, Skill.version,
@@ -75,7 +67,6 @@ def skill_snapshot(conn: sqlite3.Connection) -> dict:
 
 
 def moved(prev_last_seen: str | None, updated_at: str) -> bool:
-    """Server-computed nudge: skill touched after the agent's previous sync."""
     if prev_last_seen is None:
         return False
     try:
@@ -86,11 +77,6 @@ def moved(prev_last_seen: str | None, updated_at: str) -> bool:
 
 def resolve_agent(conn: sqlite3.Connection, agent_id, harness: str,
                    caps, now_iso: str) -> tuple[str, str | None]:
-    """(agent_id, prev_last_seen): touch a known id, mint on absent/unknown.
-
-    prev_last_seen is the value BEFORE this call (None for a fresh mint) —
-    the baseline the moved-since-last-sync flags compare against.
-    """
     peewee_db = memo_db.orm_db(conn)
     with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         row = None
@@ -111,7 +97,6 @@ def resolve_agent(conn: sqlite3.Connection, agent_id, harness: str,
 
 def persist_snapshot(conn: sqlite3.Connection, agent_id: str,
                       snapshot: dict, now_iso: str) -> None:
-    """Replace the agent's stored per-skill snapshot (hash+version)."""
     rows = [{"agent": agent_id, "skill": name, "hash": entry["hash"],
              "version": entry["version"], "updated_at": now_iso}
             for name, entry in snapshot.items()]
@@ -123,8 +108,6 @@ def persist_snapshot(conn: sqlite3.Connection, agent_id: str,
 
 
 def prune_stale_agents(conn: sqlite3.Connection, now_iso: str) -> None:
-    """Lazy staleness sweep on any sync: drop agents (and their state) whose
-    last_seen is older than STALE_AGENT_DAYS."""
     cutoff = (temporal.parse_ts(now_iso)
               - datetime.timedelta(days=STALE_AGENT_DAYS)
               ).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -158,16 +141,12 @@ def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
         }
         writes = []
         for name, description, body, body_hash, version in live:
-            # Normalized comparison: whitespace-only drift never looks dirty.
             compare_hash = hash_body_normalized(body)
             if have.get(name) != compare_hash:
                 writes.append({
                     "path": f"skills/{name}/SKILL.md",
                     "content": build_frontmatter(name, description, version, body),
                     "hash": compare_hash})
-        # Tombstoned OR unknown-to-server names the client lists -> delete.
-        # A client that applied the delete stops listing the name, so each
-        # delete surfaces once; a stale known re-gets it (F-12), never the body.
         deletes = [
             {"path": f"skills/{name}/SKILL.md"}
             for name in sorted(have) if name in tombstoned_names or name not in all_names
@@ -199,8 +178,6 @@ def rank_filter(live: list[tuple], filter_text: str) -> list[tuple]:
 
 def sync_web(conn: sqlite3.Connection, filter_text: str | None,
               offset: int, limit: int | None) -> dict:
-    # Deferred: memo.summary imports ORIENTATION from this module, so a
-    # top-level import would cycle. Same section shape as bootstrap_text.
     from memo.summary import top_memories_lines
     live = live_rows(conn)
     total = len(live)
@@ -235,20 +212,6 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
          limit: int | None = None,
          capabilities: list[str] | None = None,
          agent_id: str | None = None) -> dict:
-    """Dual-mode sync (§§20-21). Route by the agent's DECLARED persist verdict,
-    never by name (§§20-21): a non-empty capabilities declaration means the
-    caller can persist and yields a file diff; every other caller (undeclared,
-    bare legacy names, unknown) gets the L0 bundle, never an error. Only a
-    malformed harness (non-string or empty) is not_found. File-delta receivers
-    apply deletes-THEN-writes; row-ahead crash recovery keeps the row as truth
-    (M-022). Maintenance tail is wired by Task 7, not here.
-
-    Server-side identity: an absent/unknown agent_id mints a fresh uuid4hex and
-    returns it as `agent_id` (both modes); a known id is touched and its
-    post-sync per-skill snapshot persisted. An id-only caller may omit known[]
-    (the server fills it from the stored snapshot). Skills touched after the
-    agent's previous last_seen are flagged `moved_since_last_sync`.
-    """
     if not isinstance(harness, str) or not harness:
         return errors.err("not_found", prompt_store.render(
             "err_unknown_harness", harness=harness))
@@ -259,7 +222,7 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
                                                 now_iso)
     if known is None and prev_last_seen is not None:
         known = known_from_state(conn, resolved_id)
-    if caps:  # any declared persist verdict -> files delta; names never matched
+    if caps:
         out = sync_files(conn, known, offset, limit)
     else:
         out = sync_web(conn, filter, offset, limit)
@@ -276,12 +239,10 @@ def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None
     return out
 
 
-# L4 tail (Task 7, additive §23): janitor at the END of every skill_sync.
-# Logic above untouched (top-level import: maintenance never imports back).
 original_sync = sync
 
 
-def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None,  # noqa: F811 — tail wraps the sync above
+def sync(conn: sqlite3.Connection, harness: str, known: list[dict] | None = None,
          filter: str | None = None, offset: int = 0,
          limit: int | None = None,
          capabilities: list[str] | None = None,

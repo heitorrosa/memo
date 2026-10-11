@@ -1,9 +1,3 @@
-"""Pure tool impls (catch-all -> internal envelope, never raise).
-
-Peewee note: binding lives in the domain call sites (memory.save/search/
-remove, skills.*) resolved per-conn via db.orm_db — this layer stays
-lock + envelope + delegation only, no SQL of its own.
-"""
 from __future__ import annotations
 
 import time
@@ -35,7 +29,7 @@ def do_memory_search(conn, query, limit=10, namespace="default",
                          valid_at=valid_at, as_known_at=as_known_at,
                          include_superseded=include_superseded,
                          type=type, min_score=min_score)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)
     row_count = len(out) if isinstance(out, list) else 0
     log_operation("memory_search", namespace, (time.perf_counter() - start) * 1000, row_count,
@@ -57,7 +51,7 @@ def do_memory_save(conn, key, value, typ="context", namespace="default",
             out = save(conn, key, value, type=typ, namespace=namespace,
                        valid_from=valid_from, valid_until=valid_until,
                        agent_id=agent_id)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)
     log_operation("memory_save", namespace, (time.perf_counter() - start) * 1000, 1,
          out.get("action", out.get("error", "-")))
@@ -72,7 +66,7 @@ def do_memory_delete(conn, key, namespace="default", lock=None):
                 out = remove(conn, key, namespace=namespace)
         else:
             out = remove(conn, key, namespace=namespace)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)
     log_operation("memory_delete", namespace, (time.perf_counter() - start) * 1000, 1,
          out.get("action", "-"))
@@ -97,7 +91,7 @@ def do_skill_sync(conn, harness, known=None, filt=None, offset=0, limit=None,
     try:
         out = sync_call_locked(conn, harness, known, filt, offset, limit, lock,
                                capabilities, agent_id)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)
     row_count = len(out.get("files_to_write", [])) if isinstance(out, dict) else 0
     log_operation("skill_sync", "-", (time.perf_counter() - start) * 1000, row_count,
@@ -112,7 +106,7 @@ def do_skill_get(conn, name, version=None, lock=None):
             with lock:
                 return get(conn, name, version=version)
         return get(conn, name, version=version)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)
 
 
@@ -122,7 +116,7 @@ def do_skill_put(conn, name, description, body, source="local", lock=None):
             with lock:
                 return put(conn, name, description, body, source=source)
         return put(conn, name, description, body, source=source)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)
 
 
@@ -132,7 +126,7 @@ def do_skill_update(conn, name, patch, lock=None):
             with lock:
                 return update(conn, name, patch)
         return update(conn, name, patch)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)
 
 
@@ -143,5 +137,5 @@ def do_skill_install(conn, repository, skill_name, fetch=None, lock=None):
             with lock:
                 return install(conn, repository, skill_name, **fetch_kwargs)
         return install(conn, repository, skill_name, **fetch_kwargs)
-    except Exception as exc:  # noqa: BLE001 — boundary: map to envelope
+    except Exception as exc:
         return internal_error(exc)

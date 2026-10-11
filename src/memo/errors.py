@@ -1,5 +1,3 @@
-"""Error envelope stub (spec §7). Full code table lands in L4; stub serves T1-2 tests."""
-
 from __future__ import annotations
 
 ENVELOPE_CODES = (

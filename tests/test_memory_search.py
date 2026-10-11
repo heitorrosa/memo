@@ -1,5 +1,3 @@
-"""Task 4 tests: search read path, temporal, delete, bootstrap (spec §§11,14-15,22)."""
-
 import pytest
 
 from memo import db, embeddings, summary
@@ -67,7 +65,6 @@ def test_include_superseded_flagged(tmp_path):
 
 
 def test_valid_at_future_excludes(tmp_path):
-    # Future-dated row is current-but-not-valid: now excludes it (T-8).
     conn = mem(tmp_path)
     save(conn, "move.date", "moving to Sao Paulo", valid_from="2027-01-01")
     assert search(conn, "moving Sao Paulo") == []
@@ -77,7 +74,6 @@ def test_valid_at_future_excludes(tmp_path):
 
 
 def test_valid_at_past_window(tmp_path):
-    # §11 table: past T sees A only via include+window; default sees neither.
     conn = mem(tmp_path)
     r = save(conn, "editor.indent", "prefers tabs", valid_from="2026-01-10")
     assert r["action"] == "created"
@@ -91,7 +87,6 @@ def test_valid_at_past_window(tmp_path):
 
 
 def test_as_known_at(tmp_path):
-    # Believed-then: K before the supersede sees A as current.
     conn = mem(tmp_path)
     save(conn, "editor.indent", "prefers tabs")
     ca = conn.execute(
@@ -106,15 +101,14 @@ def test_as_known_at(tmp_path):
 
 
 def test_touch_once(tmp_path):
-    # Exactly once per returned row: uses+1, score×1.1, S-growth (M-005).
     conn = mem(tmp_path)
     save(conn, "editor.indent", "prefers tabs", type="preference")
     search(conn, "editor tabs")
     uses, score, stab = db_row(conn, "editor.indent")
     assert (uses, round(score, 6)) == (1, 1.1)
-    assert stab == pytest.approx(14.0 * 1.3)  # R(0)=1: full beta growth
+    assert stab == pytest.approx(14.0 * 1.3)
     search(conn, "editor tabs")
-    assert db_row(conn, "editor.indent")[0] == 2  # never +2 per call
+    assert db_row(conn, "editor.indent")[0] == 2
     conn.close()
 
 
@@ -140,7 +134,6 @@ def test_delete_soft(tmp_path):
 
 
 def test_delete_missing_not_found(tmp_path):
-    # Forgetting the forgotten is success-shaped, NOT an error (M-004).
     conn = mem(tmp_path)
     assert remove(conn, "ghost") == {"key": "ghost", "action": "not_found"}
     conn.close()
@@ -151,7 +144,7 @@ def test_delete_keeps_family(tmp_path):
     contradict_pair(conn)
     remove(conn, "editor.indent.v2")
     hits = search(conn, "indentation", include_superseded=True)
-    assert [h["key"] for h in hits] == ["editor.indent"]  # history intact
+    assert [h["key"] for h in hits] == ["editor.indent"]
     conn.close()
 
 
@@ -163,7 +156,7 @@ def test_bootstrap_shape(tmp_path):
     blocks = ["# memo bootstrap", "## Orientation", "## Top memories (",
               "## Skill index (", "## Stats: 1/250 memories"]
     idx = [text.index(b) for b in blocks]
-    assert idx == sorted(idx)  # exact block order (§22)
+    assert idx == sorted(idx)
     assert "editor.indent" in text and "qol-deploy" in text
     conn.close()
 
@@ -179,7 +172,6 @@ def test_cross_namespace_isolation(tmp_path):
 
 
 def test_date_only_coercion(tmp_path):
-    # §32: date-only valid_from = that month's first day for predicates.
     conn = mem(tmp_path)
     save(conn, "party.date", "anniversary party", valid_from="2026-10")
     vf = conn.execute(
@@ -192,7 +184,6 @@ def test_date_only_coercion(tmp_path):
 
 
 def test_monotonic_guard(tmp_path):
-    # F-15: clock jumps back -> updated_at never regresses.
     conn = mem(tmp_path)
     save(conn, "editor.indent", "prefers tabs")
     conn.execute("UPDATE memories SET updated_at='2999-01-01T00:00:00+00:00'"

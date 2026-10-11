@@ -1,4 +1,3 @@
-"""Shared server primitives: domain flags, logging, error envelope (spec §§4,7)."""
 from __future__ import annotations
 
 import os
@@ -14,7 +13,6 @@ def env_flag(name: str) -> bool:
 
 
 def resolve_domains() -> tuple[bool, bool]:
-    """(memory_on, skills_on) from MEMO_DISABLE_* (spec §4.1b)."""
     return not env_flag("MEMO_DISABLE_MEMORY"), not env_flag("MEMO_DISABLE_SKILLS")
 
 
@@ -26,7 +24,6 @@ def startup_line(db_path: str, has_vec: bool, memory_on: bool,
 
 
 def log_operation(operation: str, namespace: str, elapsed_ms: float, row_count: int, action: str) -> None:
-    # NEVER values/bodies/keys/bundle text (keys can be PII-shaped).
     print(f"op={operation} ns={namespace} ms={elapsed_ms:.1f} rows={row_count} action={action}",
           file=sys.stderr)
 

@@ -1,5 +1,3 @@
-"""Task 3 tests: memory_save ladder, classify, trivia gate (spec §§8-10)."""
-
 import warnings
 
 import pytest
@@ -35,7 +33,6 @@ def count(conn):
 
 
 def test_exact_update(tmp_path):
-    # Same key + new value = UPDATE, never supersede (§8.1).
     conn = mem(tmp_path)
     assert save(conn, "editor.indent", "prefers tabs")["action"] == "created"
     r = save(conn, "editor.indent", "prefers spaces")
@@ -43,12 +40,11 @@ def test_exact_update(tmp_path):
     assert count(conn) == 1
     row = fetch_row(conn, "editor.indent")
     assert row[1] == "prefers spaces" and row[2] == "current"
-    assert row[7] == 1  # uses+1
+    assert row[7] == 1
     conn.close()
 
 
 def test_fuzzy_extends(tmp_path):
-    # Similar key, additive info -> merged into old row, one row total.
     conn = mem(tmp_path)
     save(conn, "editor.tabs", "prefers tabs")
     r = save(conn, "editor.tabs.pref", "prefers tabs in editor")
@@ -58,7 +54,6 @@ def test_fuzzy_extends(tmp_path):
 
 
 def test_contradict_supersedes(tmp_path):
-    # Contradiction across keys: old superseded, same family, chain linked.
     conn = mem(tmp_path)
     save(conn, "editor.indent", "prefers tabs")
     old = fetch_row(conn, "editor.indent")
@@ -66,11 +61,11 @@ def test_contradict_supersedes(tmp_path):
     assert r["action"] == "superseded"
     new = fetch_row(conn, "editor.indent.v2")
     assert new is not None and new[2] == "current"
-    assert new[3] == old[3]  # same family_id
+    assert new[3] == old[3]
     upd = fetch_row(conn, "editor.indent")
     assert upd[2] == "superseded" and upd[4] == "editor.indent.v2"
-    assert upd[5] == new[10]  # valid_to(A) = valid_from(B), no gaps
-    assert new[6] in ("supersedes", "corrects")  # relation lives on the winner
+    assert upd[5] == new[10]
+    assert new[6] in ("supersedes", "corrects")
     conn.close()
 
 
@@ -82,7 +77,7 @@ def test_unrelated_coexists(tmp_path):
     assert count(conn) == 2
     a = fetch_row(conn, "ml.frame")
     b = fetch_row(conn, "ml.research")
-    assert a[3] != b[3]  # NEW family
+    assert a[3] != b[3]
     conn.close()
 
 
@@ -91,12 +86,11 @@ def test_qualifies_no_status_change(tmp_path):
     save(conn, "home.city", "lives in Campinas")
     save(conn, "home.city.scope", "also studies in Sao Paulo")
     old = fetch_row(conn, "home.city")
-    assert old[2] == "current"  # no status change on the old row
+    assert old[2] == "current"
     conn.close()
 
 
 def test_reasserts_same_row(tmp_path):
-    # Time-relative restatement merges: one row, never duplicates (Review Focus).
     conn = mem(tmp_path)
     save(conn, "editor.indent", "prefers spaces")
     r = save(conn, "editor.indent.note", "still prefers spaces as of 2026-10")
@@ -106,7 +100,6 @@ def test_reasserts_same_row(tmp_path):
 
 
 def test_trivia_rejected(tmp_path):
-    # Trivia -> SUCCESS shape, do nothing, don't retry (M-#1 / §7).
     conn = mem(tmp_path)
     for junk in ("ok", "hi", "thanks", "got it", "x"):
         r = save(conn, f"junk.{junk}", junk)
@@ -116,7 +109,6 @@ def test_trivia_rejected(tmp_path):
 
 
 def test_retry_idempotent(tmp_path):
-    # Retry after timeout -> created then updated/merged, never two rows (T-7).
     conn = mem(tmp_path)
     assert save(conn, "project.stack", "uses Bun not npm")[ "action"] == "created"
     assert save(conn, "project.stack", "uses Bun not npm")["action"] == "updated"
@@ -125,7 +117,6 @@ def test_retry_idempotent(tmp_path):
 
 
 def test_future_valid_from_kept(tmp_path):
-    # Future valid_from MUST NOT be clamped (M-010, T-8).
     conn = mem(tmp_path)
     save(conn, "move.date", "moving to SP", valid_from="2027-01-01")
     row = fetch_row(conn, "move.date")
@@ -134,7 +125,6 @@ def test_future_valid_from_kept(tmp_path):
 
 
 def test_oversize_accepted(tmp_path):
-    # F-14: 10KB value accepted (truncation is display-only); warn past 4KB.
     conn = mem(tmp_path)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -144,8 +134,6 @@ def test_oversize_accepted(tmp_path):
     assert len(fetch_row(conn, "big.note")[1]) > 10_000
     conn.close()
 
-
-# --- save validation: hard structure rejects, style advisories (fixes-01) ---
 
 def test_bad_type_rejected_invalid_input(tmp_path):
     from memo.memory.save import original_save
@@ -157,7 +145,6 @@ def test_bad_type_rejected_invalid_input(tmp_path):
 
 
 def test_type_prefix_mismatch_rejected(tmp_path):
-    # A dotted prefix that itself names a type must equal type.
     conn = mem(tmp_path)
     r = save(conn, "preference.theme", "durable fact here", type="context")
     assert r["error"] == "invalid_input"
@@ -167,8 +154,6 @@ def test_type_prefix_mismatch_rejected(tmp_path):
 
 
 def test_legacy_dotted_prefix_allowed(tmp_path):
-    # Transition: a dotted prefix naming no type stays writable, so
-    # existing rows (editor.*, correction.*, ...) remain updatable.
     conn = mem(tmp_path)
     assert save(conn, "editor.indent", "prefers tabs")["action"] == "created"
     assert save(conn, "correction.tip", "durable feedback note",
@@ -201,7 +186,6 @@ def test_value_date_prefix_advisory(tmp_path):
 
 
 def test_combined_advisories_join_with_too_dense(tmp_path):
-    # Style notes join with '; '; the tail appends too_dense, never overwrites.
     conn = mem(tmp_path)
     r = save(conn, "Review 2026-10", "x" * 600)
     assert r["action"] == "created"
@@ -213,7 +197,6 @@ def test_combined_advisories_join_with_too_dense(tmp_path):
 
 
 def test_do_memory_save_forwards_agent_id(tmp_path):
-    # Tools-layer threading: agent_id stamps, omitted preserves (fixes-01 #2).
     from memo.server.operations import do_memory_save
     conn = mem(tmp_path)
     writer = "a1" * 16
@@ -232,7 +215,6 @@ def test_do_memory_save_forwards_agent_id(tmp_path):
 
 
 def test_do_memory_save_bad_type_is_invalid_input(tmp_path):
-    # Validation code, never internal: bad type surfaces invalid_input.
     from memo.server.operations import do_memory_save
     conn = mem(tmp_path)
     assert do_memory_save(conn, "k", "durable value here", typ="nonsense") == {

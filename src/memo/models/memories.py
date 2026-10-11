@@ -1,9 +1,3 @@
-"""Memory-domain tables: Memory + MemoryFTS + ArchivedMemory + Episode (spec §5).
-
-Canonical per-table Model module (Peewee-canonical): these classes own the
-memories-domain schema. orm.py keeps only database/bind glue; __init__
-re-exports this module's names for the stable API.
-"""
 from __future__ import annotations
 
 from peewee import (
@@ -42,11 +36,7 @@ class Memory(BaseMemoryModel):
     updated_at = TextField()
     valid_from = TextField()
     valid_to = TextField(null=True)
-    # User-set TTL: a fact past valid_until decays out of ranking. NULL =
-    # no expiry. Distinct from valid_to, which the supersede chain owns.
     valid_until = TextField(null=True)
-    # Writer stamp: agent_id of the last writer (Agent model key, nullable;
-    # no FK constraint so memory writes never fail on identity plumbing).
     agent_id = TextField(null=True)
     status = TextField(
         default="current", constraints=[SQL("DEFAULT 'current'")]
@@ -80,8 +70,6 @@ class MemoryFTS(FTS5Model):
 
 
 class ArchivedMemory(BaseMemoryModel):
-    # Maps the RAW_TAIL CTAS clone (mirrors memories + 2 cols); never in
-    # CREATE_MODELS — the clone owns the table shape.
     key = TextField(null=True)
     namespace = TextField(null=True)
     value = TextField(null=True)

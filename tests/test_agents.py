@@ -1,11 +1,3 @@
-"""Server-side agent identity + sync state (Agent/AgentState).
-
-The server mints and tracks an agent id so a harness may carry only the id
-instead of a full known[] list; an id-only caller gets a precise delta from
-the stored per-skill snapshot, plus server-computed moved-since-last-sync
-flags. Legacy no-id calls keep today's routing (bundle by default).
-"""
-
 from memo import db
 from memo import prompts as prompt_store
 from memo.models.skills import utc_now
@@ -49,7 +41,7 @@ def test_mint_on_absent_returns_id(tmp_path):
     files = files_delta(conn)
     for out in (bundle, files):
         assert isinstance(out["agent_id"], str) and len(out["agent_id"]) == 32
-    assert bundle["agent_id"] != files["agent_id"]  # each cold caller is new
+    assert bundle["agent_id"] != files["agent_id"]
     assert conn.execute("SELECT count(*) FROM agents").fetchone()[0] == 2
     conn.close()
 
@@ -69,8 +61,6 @@ def test_known_id_touches_and_persists_snapshot(tmp_path):
 
 
 def test_id_only_delta_is_precise_not_baseline(tmp_path):
-    # Second sync carries only the id: the server fills known[] from its
-    # stored snapshot, so only the changed skill is re-sent.
     conn = mem(tmp_path)
     put_skill(conn, "a", body="v1")
     put_skill(conn, "b", body="v1")
@@ -88,7 +78,6 @@ def test_id_only_echoes_full_known_also_accepted(tmp_path):
     conn = mem(tmp_path)
     put_skill(conn, "a", body="v1")
     aid = files_delta(conn)["agent_id"]
-    # Both forms accepted: explicit known[] wins over the stored snapshot.
     out = files_delta(conn, agent_id=aid, known=[{"name": "a", "hash": "0" * 64}])
     assert [w["path"] for w in out["files_to_write"]] == ["skills/a/SKILL.md"]
     conn.close()
@@ -105,13 +94,11 @@ def test_id_only_delete_surfaces_from_snapshot(tmp_path):
 
 
 def test_moved_since_last_sync_annotation(tmp_path):
-    # Another actor mutates a skill after this agent's previous sync; the
-    # delta entry and the top-level list flag it.
     conn = mem(tmp_path)
     r1 = files_delta(conn)
     aid = r1["agent_id"]
     backdate(conn, aid)
-    put_skill(conn, "fresh", body="x")  # a different actor moves it
+    put_skill(conn, "fresh", body="x")
     r2 = files_delta(conn, agent_id=aid)
     writes = {w["path"]: w for w in r2["files_to_write"]}
     assert writes["skills/fresh/SKILL.md"]["moved_since_last_sync"] is True
@@ -123,9 +110,9 @@ def test_moved_flag_absent_for_untouched(tmp_path):
     conn = mem(tmp_path)
     put_skill(conn, "stable", body="s")
     aid = files_delta(conn)["agent_id"]
-    backdate(conn, aid, utc_now())  # nothing touched since that sync
+    backdate(conn, aid, utc_now())
     r = files_delta(conn, agent_id=aid)
-    assert r["files_to_write"] == []  # unchanged -> no delta at all
+    assert r["files_to_write"] == []
     assert r["moved_since_last_sync"] == []
     conn.close()
 
@@ -149,10 +136,8 @@ def test_unknown_id_re_mints_and_baselines(tmp_path):
     assert out["agent_id"] != bogus and len(out["agent_id"]) == 32
     assert conn.execute("SELECT count(*) FROM agents WHERE agent_id=?",
                         (bogus,)).fetchone()[0] == 0
-    # Re-mint is a fresh baseline: full materialization, no moved flags.
     assert len(out["files_to_write"]) == 1
     assert "moved_since_last_sync" not in out
-    # Empty/None ids mint too.
     assert len(sync(conn, "web", agent_id="")["agent_id"]) == 32
     conn.close()
 
@@ -169,13 +154,13 @@ def test_stale_agents_pruned_on_any_sync(tmp_path):
         "INSERT INTO agents(agent_id,harness,capabilities,first_seen,last_seen)"
         " VALUES('fresh','web','[]',?,?)", (utc_now(), utc_now()))
     conn.commit()
-    sync(conn, "web")  # any sync sweeps
+    sync(conn, "web")
     assert conn.execute("SELECT count(*) FROM agents WHERE agent_id='stale'"
                         ).fetchone()[0] == 0
     assert conn.execute("SELECT count(*) FROM agent_state WHERE agent_id='stale'"
                         ).fetchone()[0] == 0
     assert conn.execute("SELECT count(*) FROM agents WHERE agent_id='fresh'"
-                        ).fetchone()[0] == 1  # untouched-but-recent survives
+                        ).fetchone()[0] == 1
     conn.close()
 
 
@@ -185,11 +170,11 @@ def test_legacy_no_id_unchanged(tmp_path):
     bundle = sync(conn, "carrier-pigeon")
     assert bundle["mode"] == "bundle" and bundle["total"] == 1
     assert "qol-deploy" in bundle["bootstrap_md"]
-    assert "moved_since_last_sync" not in bundle  # legacy shape + agent_id only
+    assert "moved_since_last_sync" not in bundle
     files = sync(conn, "opencode", capabilities=CAN_PERSIST)
     assert files["mode"] == "files" and files["total"] == 1
     assert "moved_since_last_sync" not in files
-    assert sync(conn, "")["error"] == "not_found"  # malformed still errors
+    assert sync(conn, "")["error"] == "not_found"
     conn.close()
 
 
@@ -223,17 +208,13 @@ def test_prompt_documents_agent_identity():
         assert needle in text, f"missing agent-identity instruction: {needle!r}"
 
 
-# --- MCP surface: agent_id reachable through the registered tool ---
-
 def make_server(tmp_path):
-    """Build the real MCP server over a tmp DB (same wiring a harness hits)."""
     from memo.server.core import build_server
 
     return build_server(str(tmp_path / "memo.db"))
 
 
 def call(server, **args):
-    """Invoke the registered skill_sync tool and decode its JSON envelope."""
     import asyncio
     import json
 
@@ -247,7 +228,7 @@ def test_mcp_schema_exposes_agent_id(tmp_path):
     server = make_server(tmp_path)
     tool = next(t for t in asyncio.run(server.list_tools())
                 if t.name == "skill_sync")
-    assert "agent_id" in tool.inputSchema["properties"]  # reachable, not just named
+    assert "agent_id" in tool.inputSchema["properties"]
     server.memo_conn.close()
 
 
@@ -261,14 +242,12 @@ def test_mcp_no_id_mints_and_returns(tmp_path):
 
 
 def test_mcp_id_only_delta_is_precise(tmp_path):
-    # Second MCP call carries ONLY the minted id: the server fills known[]
-    # from its stored snapshot, so only the changed skill comes back.
     server = make_server(tmp_path)
     put_skill(server.memo_conn, "a", body="v1")
     put_skill(server.memo_conn, "b", body="v1")
     first = call(server, harness="opencode", capabilities=["persist"])
     aid = first["agent_id"]
-    assert len(first["files_to_write"]) == 2  # cold: full materialization
+    assert len(first["files_to_write"]) == 2
     put_skill(server.memo_conn, "b", body="v2")
     second = call(server, harness="opencode", capabilities=["persist"],
                   agent_id=aid)
@@ -285,7 +264,6 @@ def test_mcp_unknown_id_re_mints_never_errors(tmp_path):
                agent_id=bogus)
     assert "error" not in out
     assert out["agent_id"] != bogus and len(out["agent_id"]) == 32
-    # Re-mint is a fresh baseline: full materialization, no moved flags.
     assert len(out["files_to_write"]) == 1
     assert "moved_since_last_sync" not in out
     server.memo_conn.close()
