@@ -10,15 +10,23 @@ One `memo` container is the sole writer of `memo.db` in WAL mode. Harnesses conn
 
 ## Quickstart
 
-1. Set a strong `MEMO_TOKEN` in `.env` using `.env.example` as a reference.
-2. Start the container:
+Prerequisites: Docker (Engine or Desktop) with the Compose plugin.
 
-   ```sh
-   docker compose up -d --build
-   docker compose logs -f memo
-   ```
+```powershell
+.\install.ps1
+```
 
-The server listens on port `8000`, stores its database in `./data/memo.db`, and exposes `/health` and `/mcp`. Health checks are unauthenticated; MCP requests require the bearer token.
+`install.ps1` is idempotent. It writes `.env` with a generated `MEMO_TOKEN`, fetches the embedding weights into `./models` through a temporary container (no local Python), starts the published image from `docker-compose.user.yml`, and prints the health URL. The token lives in `./.env` (gitignored).
+
+To run the three steps yourself instead:
+
+```sh
+docker run --rm -v "$PWD/models:/models" -v "$PWD/scripts:/scripts:ro" -e FASTEMBED_CACHE_PATH=/models ghcr.io/heitorrosa/memo:3.0.0 python /scripts/fetch_model.py
+docker compose -f docker-compose.user.yml pull
+docker compose -f docker-compose.user.yml up -d
+```
+
+To connect a chatbot, see [Connect a harness](#connect-a-harness). The server stores its database in `./data/memo.db` and exposes `/health` and `/mcp`. Health checks are unauthenticated; MCP requests require the bearer token.
 
 For local development, install with `pip install .` and run the CLI with an explicit database path. The optional stdio transport is intended for offline or CI use. Never run multiple server processes against the same database.
 

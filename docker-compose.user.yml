@@ -1,0 +1,20 @@
+services:
+  memo:
+    image: ghcr.io/heitorrosa/memo:3.0.0
+    container_name: memo-user
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/data
+      - ./models:/models:ro
+    environment:
+      FASTEMBED_CACHE_PATH: /models
+      HF_HUB_OFFLINE: "1"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "python", "-m", "memo.server", "--health", "http://127.0.0.1:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
