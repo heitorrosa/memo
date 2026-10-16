@@ -124,10 +124,6 @@ def rebuild_fts(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
 
 
-def migrator():
-    return SqliteMigrator(peewee_database)
-
-
 def probe_single_writer(conn: sqlite3.Connection) -> bool:
     try:
         conn.execute("BEGIN IMMEDIATE")

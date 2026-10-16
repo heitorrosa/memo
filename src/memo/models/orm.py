@@ -35,7 +35,7 @@ from memo.models.memories import (
     MemoryFTS,
 )
 from memo.models.meta import MemoMeta
-from memo.models.skills import Skill, utc_now
+from memo.models.skills import Skill
 
 HEADER: str = ("-- GENERATED from memo.models: do not hand-edit. "
                "Edit src/memo/models/{memories,skills,meta,agents}.py, then run `python -m memo.models`.")

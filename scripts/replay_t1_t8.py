@@ -19,24 +19,6 @@ conn = db.connect(os.path.join(tmp, "memo.db"))
 assert db.migrate(conn) == 3
 
 
-def ts(days_ago):
-    return (datetime.datetime.now(datetime.timezone.utc)
-            - datetime.timedelta(days=days_ago)).isoformat()
-
-
-def direct(key, typ="context", age=10.0, uses=0, score=1.0, value=None):
-    emb = embeddings.embed([value or key])[0]
-    t = ts(age)
-    stab = {"preference": 14.0, "feedback": 10.0, "analysis": 7.0, "context": 3.0}[typ]
-    with conn:
-        conn.execute(
-            "INSERT INTO memories(key,namespace,value,type,embedding,stability,"
-            "score,uses,created_at,updated_at,valid_from,status,family_id)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (key, "default", value or f"durable fact {key}", typ, emb,
-             stab, score, uses, t, t, t, "current", f"fam-{key}"))
-
-
 for k, v in [("editor.indent", "prefers tabs"), ("project.stack", "Vite React Bun"),
              ("standup.time", "standup nine thirty"), ("deploy.cmd", "deploy in ops runbook"),
              ("review.cycle", "review each quarter")]:
@@ -75,7 +57,6 @@ assert "runbook" in get(conn, "web.runbook")["body"]
 assert "web.runbook" in sync(conn, "web")["bootstrap_md"]
 print("T-3 SKILL-E2E ok: v1 + no-op re-put + get body + web bundle reflects")
 
-n0 = conn.execute("SELECT COUNT(*) FROM memories WHERE status='current'").fetchone()[0]
 i = 0
 while conn.execute("SELECT COUNT(*) FROM memories WHERE status='current'").fetchone()[0] < 250:
     save(conn, f"burst.{uuid.uuid4().hex[:8]}", f"durable archived note {i} zebra xray {i*7}写的历史记录")

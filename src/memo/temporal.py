@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import datetime
 import re
-import sqlite3
 import sys
 
 OUTCOMES = ("unrelated", "qualifies", "extends", "contradicts", "reasserts")
@@ -115,25 +114,3 @@ def in_window(row: dict, at: datetime.datetime) -> bool:
         except ValueError:
             return False
     return valid_from_dt <= at
-
-
-def chain_walk(conn: sqlite3.Connection, family_id: str) -> list[dict]:
-    rows = conn.execute(
-        "SELECT key, namespace, value, type, status, family_id, superseded_by,"
-        " valid_from, valid_to, valid_until, agent_id, relation_type, uses, score, created_at,"
-        " updated_at FROM memories WHERE family_id=? ORDER BY valid_from",
-        (family_id,)).fetchall()
-    columns = ("key", "namespace", "value", "type", "status", "family_id",
-               "superseded_by", "valid_from", "valid_to", "valid_until", "agent_id", "relation_type",
-               "uses", "score", "created_at", "updated_at")
-    return [dict(zip(columns, record)) for record in rows]
-
-
-def display_line(row: dict, prev_value: str | None = None) -> str:
-    since = str(row.get("valid_from", ""))[:10]
-    if row.get("status") == "current":
-        tail = f"(current, since {since}; previously {prev_value[:60]})" if prev_value \
-            else f"(current, since {since})"
-    else:
-        tail = f"(superseded, was valid since {since})"
-    return f"- [{row.get('type')}] {row.get('value')} {tail}"
