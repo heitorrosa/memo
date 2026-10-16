@@ -1,11 +1,3 @@
-"""v2 (memory.db + skills.db) -> v3 memo.db importer (spec §43).
-
-Copies rows verbatim (embeddings model-identical, no recompute), verifies
-skill sha256 (FAIL LOUD on mismatch), seeds memo_meta. Idempotent: refuses
-an already-populated target. `--dry-run` prints counts only.
-Time-boxed stub: covers the documented contract, not every v2 edge.
-"""
-
 from __future__ import annotations
 
 import argparse

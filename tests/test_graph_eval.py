@@ -1,35 +1,3 @@
-"""Deterministic eval for graph Phase 1 neighbor expansion (MEMO_GRAPH_EXPAND).
-
-Fixture (one seeded graph, namespace `default`): ten anchor clusters, each an
-anchor fact with two `derived_from` children at weight 1.0 and a shared leading
-entity via `mentions`; one contradicting pair (weight 0.0); one isolated fact;
-and twelve filler facts. Every query is the unique token of one anchor, and only
-that anchor is left current (fresh) while all other cluster facts are backdated,
-so without expansion the cluster children sink below the filler band and are cut
-from the top ten.
-
-Co-retrieval = at least two of an anchor's three cluster facts inside the top 10.
-
-| query token | OFF | ON  |
-|-------------|-----|-----|
-| quokka      | 0   | 1   |
-| zephyr      | 0   | 1   |
-| nimbus      | 0   | 1   |
-| marlin      | 0   | 1   |
-| cobalt      | 0   | 1   |
-| tundra      | 0   | 1   |
-| velvet      | 0   | 1   |
-| onyx        | 0   | 1   |
-| ember       | 0   | 1   |
-| harbor      | 0   | 1   |
-| TOTAL       | 0/10| 10/10|
-
-Flag OFF leaves the direct-hit pool untouched (expansion is never invoked, and
-the fusion formula is unchanged); flag ON merges the 1-hop `derived_from`
-children at score = source_score x stored_edge_weight x 0.6. No LLM judge: the
-whole eval is deterministic (the embedding fallback is a text-seeded hash).
-"""
-
 import datetime
 import json
 import os
@@ -78,7 +46,6 @@ def fallback():
 
 @pytest.fixture(autouse=True)
 def frozen_time(monkeypatch):
-    """Pin the clock so scores are reproducible run to run."""
     monkeypatch.setattr(temporal, "now_iso", lambda: FROZEN_NOW)
 
 

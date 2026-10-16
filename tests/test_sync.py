@@ -260,17 +260,17 @@ def test_sync_prompt_teaches_self_evaluation():
         assert needle in text, f"missing self-evaluation instruction: {needle!r}"
 
 
-def test_sync_prompt_names_no_longer_route():
-    import pathlib
-
-    import memo.skills.sync as sync_mod
+def test_sync_prompt_names_no_longer_route(tmp_path):
     text = prompt_store.render("tool_skill_sync")
     assert "opencode, claude-code, filesystem" not in text
     assert "no longer route" in text
     assert "declaration" in text and "skill_create, file_write" not in text
     assert "capabilities" in text
-    source = pathlib.Path(sync_mod.__file__).read_text(encoding="utf-8")
-    assert "opencode, claude-code, filesystem, web" in source
+    conn = mem(tmp_path)
+    for legacy in ("opencode", "claude-code", "filesystem", "web"):
+        assert sync(conn, legacy)["mode"] == "bundle"
+    assert sync(conn, "any-harness", capabilities=CAN_PERSIST)["mode"] == "files"
+    conn.close()
     assert "files_to_write (path, content, hash)" in text
     assert "files_to_delete (path)" in text
     assert "offset, total" in text

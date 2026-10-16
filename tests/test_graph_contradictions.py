@@ -1,18 +1,3 @@
-"""Graph Phase 2: contradiction surfacing.
-
-A `contradicts` edge is flag-only: stored weight 0.0, never scored, never a
-retrieval candidate. After the merged pool is ranked (post-expansion, post
-filters), every returned hit whose OTHER endpoint is a current, valid fact in
-the same namespace carries `contradictions: [{key, declarers, weight}]` naming
-that counterpart. Both sides surface when both rank; a hit whose counterpart
-does not rank still carries the flag, and the counterpart is never added to the
-result set. Superseded rows stay hidden by default, and a superseded or expired
-counterpart is not a fact, so it is never named.
-
-Result shape stays additive: a hit with no flag keeps the exact pre-Phase-2
-key set {key, value, type, score, age_days, uses, updated_at}.
-"""
-
 import pytest
 
 from memo import db, embeddings, temporal
@@ -39,7 +24,6 @@ def fallback():
 
 @pytest.fixture(autouse=True)
 def frozen_time(monkeypatch):
-    """Pin the clock so ages are zero and scores are reproducible."""
     monkeypatch.setattr(temporal, "now_iso", lambda: FROZEN_NOW)
 
 
@@ -50,8 +34,6 @@ def mem(tmp_path):
 
 
 def seed_pair(conn, agents=(AGENT_A,), valid_until=None):
-    """Two dissimilar keys whose values share the query token; the second
-    declares `contradicts` -> first, once per agent id."""
     save(conn, PAIR_A, "also display dark theme")
     for agent in agents:
         save(conn, PAIR_B, "also display light theme", valid_until=valid_until,
@@ -149,8 +131,6 @@ def test_agreement_upgrade_reflected_in_flag(tmp_path):
     ).fetchone()[0] == "confirmed"
     confirmed = by_key(conn)[PAIR_A]["contradictions"][0]
     assert confirmed["declarers"] == [AGENT_A, AGENT_B]
-    # the upgrade shows in declarers; weight stays the stored 0.0 because a
-    # contradicts edge is flag-only, so confirmation buys no boost
     assert provisional["weight"] == confirmed["weight"] == 0.0
     conn.close()
 

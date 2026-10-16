@@ -11,9 +11,6 @@ from memo.models.orm import Memory as OrmMemory
 
 MAX_DEPTH = 2
 
-# Agent-declared link relations. `same_as` resolves into an alias row and is
-# never stored as an edge; the ladder (supersedes/corrects/qualifies) owns all
-# versioning, so no rel here may claim supersession.
 RELS = ("mentions", "supports", "contradicts", "derived_from", "same_as")
 VERSIONING_RELS = frozenset({
     "supersedes", "supersede", "superseded_by", "corrects", "qualifies",
@@ -22,20 +19,12 @@ VERSIONING_RELS = frozenset({
 MAX_LINKS = 10
 MAX_ALIASES = 5
 
-# Agreed edge weight = base(rel) x agreement multiplier, recomputed on every
-# new declaration. contradicts is flag-only (0.0), never scored.
 BASE_WEIGHT = {"derived_from": 1.0, "mentions": 0.5, "supports": 0.8,
                "contradicts": 0.0}
 MULTIPLIER = {"candidate": 0.5, "confirmed": 1.0}
 
 
 def valid_node(conn: sqlite3.Connection, key: str, at) -> bool:
-    """Temporal-validity gate for a graph node at `at`.
-
-    A node with no memories row is a VIRTUAL entity (a dotted key's leading
-    segment) and is always valid. A node backed by rows is valid when any row
-    is effective (not superseded, valid_from reached) and not expired.
-    """
     with memo_db.orm_ctx(conn):
         rows = list(
             OrmMemory.select(
@@ -62,7 +51,6 @@ def valid_node(conn: sqlite3.Connection, key: str, at) -> bool:
 
 
 def neighbors(conn: sqlite3.Connection, node: str) -> list[tuple[str, str, float]]:
-    """Edges touching `node` in either direction: (other_key, rel, weight)."""
     with memo_db.orm_ctx(conn):
         rows = list(
             OrmEdge.select(
@@ -79,13 +67,6 @@ def neighbors(conn: sqlite3.Connection, node: str) -> list[tuple[str, str, float
 
 
 def neighborhood(conn: sqlite3.Connection, key: str, depth: int = 1) -> list[dict]:
-    """Read-only BFS over the edges graph, both directions, 1-2 hops.
-
-    Pure read: no writes, no ranking changes. Every returned node is filtered
-    by temporal validity at now, so superseded and past-valid_until rows (and
-    anything reachable only through them) are dropped. Order is deterministic:
-    hops asc, weight desc, key asc.
-    """
     if depth < 1:
         return []
     depth = min(depth, MAX_DEPTH)
@@ -116,12 +97,6 @@ def neighborhood(conn: sqlite3.Connection, key: str, depth: int = 1) -> list[dic
 
 
 def current_fact(conn: sqlite3.Connection, key: str, namespace: str, at) -> bool:
-    """True when `key` is a real, current, valid fact in `namespace`.
-
-    A counterpart with no row (a virtual entity node) is not a fact, and a
-    superseded or past-valid_until row is no longer one, so neither can be
-    named by a contradiction flag.
-    """
     with memo_db.orm_ctx(conn):
         row = OrmMemory.get_or_none(
             (OrmMemory.key == key) & (OrmMemory.namespace == namespace))
@@ -134,14 +109,6 @@ def current_fact(conn: sqlite3.Connection, key: str, namespace: str, at) -> bool
 
 def contradiction_flags(conn: sqlite3.Connection, key: str, namespace: str,
                         at) -> list[dict]:
-    """Phase 2 surfacing: contradicts edges touching `key` whose OTHER endpoint
-    is a current, valid fact in `namespace`.
-
-    Flag only: returns [{key, declarers, weight}] (declarers = distinct agent
-    ids from edge_declarers, weight = stored edge weight, 0.0 for contradicts)
-    ordered by counterpart key. The counterpart is never force-included in a
-    result set; the flag only names it.
-    """
     with memo_db.orm_ctx(conn):
         rows = list(
             OrmEdge.select(OrmEdge.src_key, OrmEdge.dst_key, OrmEdge.weight)
@@ -170,11 +137,6 @@ def contradiction_flags(conn: sqlite3.Connection, key: str, namespace: str,
 
 
 def key_exists(conn: sqlite3.Connection, key: str) -> bool:
-    """A link target exists as a memory key OR as a virtual entity node.
-
-    Virtual entities have no row of their own; a dotted key's leading segment
-    (for example `homelab` for `homelab.memory.x`) counts as existing.
-    """
     with memo_db.orm_ctx(conn):
         if OrmMemory.select().where(OrmMemory.key == key).exists():
             return True
@@ -184,11 +146,6 @@ def key_exists(conn: sqlite3.Connection, key: str) -> bool:
 
 def validate_links(conn: sqlite3.Connection, key: str,
                    links) -> tuple[list[tuple[str, str]], list[str]]:
-    """Deterministic, cheap link validation. Returns (accepted, notes).
-
-    Rejections never block the save; they come back as suggestion notes. A
-    duplicate (to, rel) is idempotent (kept once). Over-cap entries are dropped.
-    """
     accepted: list[tuple[str, str]] = []
     notes: list[str] = []
     if links is None:
@@ -235,7 +192,6 @@ def validate_links(conn: sqlite3.Connection, key: str,
 
 
 def validate_aliases(aliases) -> tuple[list[tuple[str, str]], list[str]]:
-    """Alias validation mirroring validate_links: (segment, canonical) pairs."""
     accepted: list[tuple[str, str]] = []
     notes: list[str] = []
     if aliases is None:
@@ -271,13 +227,6 @@ def validate_aliases(aliases) -> tuple[list[tuple[str, str]], list[str]]:
 
 def record_alias(conn: sqlite3.Connection, segment: str, canonical: str,
                  declarer: str) -> str:
-    """Upsert one alias declaration; returns the resulting status.
-
-    First declaration -> candidate, evidence 1. Same declarer again ->
-    evidence+1, still candidate (an app cannot confirm itself). A second
-    DISTINCT declarer -> confirmed. Competing canonicals for one segment are
-    separate rows and both persist.
-    """
     now = temporal.now_iso()
     db = memo_db.orm_db(conn)
     with memo_db.orm_ctx(conn):
@@ -305,12 +254,6 @@ def record_alias(conn: sqlite3.Connection, segment: str, canonical: str,
 
 def record_link(conn: sqlite3.Connection, src: str, dst: str, rel: str,
                 declarer: str) -> None:
-    """Upsert one agent-declared edge with its agreed weight.
-
-    A server-derived edge (one with no declarer row) is a duplicate and is left
-    untouched, so auto-emission keeps its weight. Otherwise the declarer row is
-    upserted and the edge weight recomputed: base(rel) x multiplier(status).
-    """
     now = temporal.now_iso()
     db = memo_db.orm_db(conn)
     with memo_db.orm_ctx(conn):
@@ -355,11 +298,6 @@ def record_link(conn: sqlite3.Connection, src: str, dst: str, rel: str,
 
 def record_declarations(conn: sqlite3.Connection, key: str, links, aliases,
                         declarer: str) -> str | None:
-    """Apply a save's links/aliases declarations; returns suggestion notes.
-
-    Additive and non-blocking: the fact has already landed. `same_as` links
-    resolve into alias rows instead of edges.
-    """
     accepted_links, notes = validate_links(conn, key, links)
     accepted_aliases, alias_notes = validate_aliases(aliases)
     notes.extend(alias_notes)

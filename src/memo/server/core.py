@@ -24,11 +24,6 @@ from memo.server.shared import resolve_domains
 
 
 def caller_identity(ctx) -> tuple[str | None, str | None]:
-    """Best-effort (bearer token, user agent) for the current MCP request.
-
-    Only HTTP requests carry these; stdio and in-process calls yield (None,
-    None), so the save mints its fallback declarer from 'unknown' instead.
-    """
     try:
         request = ctx.request_context.request if ctx is not None else None
     except Exception:

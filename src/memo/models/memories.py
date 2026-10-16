@@ -70,11 +70,6 @@ class MemoryFTS(FTS5Model):
 
 
 class Edge(BaseMemoryModel):
-    """Graph edges (Phase 0). Entity nodes are VIRTUAL: a dotted key's leading
-    segment (e.g. `homelab` in `homelab.memory.x`) is a node with no row here.
-    family_id stays version lineage; no edge rel encodes versioning.
-    """
-
     src_key = TextField()
     dst_key = TextField()
     rel = TextField()
@@ -90,13 +85,6 @@ class Edge(BaseMemoryModel):
 
 
 class Alias(BaseMemoryModel):
-    """Agent-declared aliases (Phase 0.5): segment and canonical name the same
-    thing. PK is (segment, canonical), not segment alone, so competing canonicals
-    for one segment BOTH persist (later traversal picks the highest evidence).
-    Agreement is by distinct declarers: first -> candidate, a second distinct
-    declarer -> confirmed. No user confirmation exists anywhere in this design.
-    """
-
     segment = TextField()
     canonical = TextField()
     declarers = TextField(default="", constraints=[SQL("DEFAULT ''")])
@@ -116,14 +104,6 @@ class Alias(BaseMemoryModel):
 
 
 class EdgeDeclarer(BaseMemoryModel):
-    """Declarer agreement for agent-declared links (Phase 0.5).
-
-    The edges table carries only the agreed weight; WHO declared a link lives
-    here because the Phase 0 edges column set is pinned. A server-derived edge
-    has no row here (implicit declarer 'server', which never counts toward
-    agreement); only agent declarations create rows.
-    """
-
     src_key = TextField()
     dst_key = TextField()
     rel = TextField()

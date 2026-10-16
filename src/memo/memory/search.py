@@ -19,28 +19,17 @@ from memo.memory.graph import contradiction_flags, neighborhood
 from memo.models import orm as orm_models
 from memo.models.orm import Memory as OrmMemory
 
-# Graph Phase 1: flag-gated neighbor expansion. Off (the default) must be
-# byte-identical to the pre-expansion retrieval path, so the flag is read per
-# request and the whole block is skipped when it is unset.
 EXPAND_TOP_K = 5
 EXPAND_DECAY = 0.6
 EXPAND_MAX_ADDED = 20
 
 
 def expand_enabled() -> bool:
-    """MEMO_GRAPH_EXPAND, read per request (not at import) so tests can flip it."""
     return os.getenv("MEMO_GRAPH_EXPAND", "").strip().lower() in ("1", "true", "yes")
 
 
 def expand_candidates(conn: sqlite3.Connection, scored: list[dict],
                       namespace: str) -> list[dict]:
-    """Propose 1-hop neighbors of the top hits as extra candidates (Phase 1).
-
-    Graph proposes, rank disposes: a neighbor enters the pool with
-    source_score x stored_edge_weight x 0.6, dedup by key keeps the max score,
-    and at most 20 neighbor keys are merged. `contradicts` edges are flag-only
-    and never contribute. Pure read; the fusion formula is untouched.
-    """
     by_key = {row["key"]: row for row in scored}
     proposed: dict[str, float] = {}
     for source in sorted(scored, key=lambda row: row["score"], reverse=True)[:EXPAND_TOP_K]:
@@ -167,8 +156,6 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             result.pop("stab"), result.pop("age"), result.pop("status")
             result.pop("created")
             result["updated_at"] = result.pop("updated")
-    # Graph Phase 2: flag each returned hit with the current valid facts it
-    # contradicts. Additive and score-free; the counterpart is never added.
     for result in scored:
         flags = contradiction_flags(conn, result["key"], namespace, now)
         if flags:

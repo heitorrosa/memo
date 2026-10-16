@@ -29,15 +29,6 @@ VALUE_DATE_PREFIX_PATTERN = re.compile(r"\[\d{4}-\d{2}-\d{2}\]")
 
 
 def fallback_agent_id(token: str | None, user_agent: str | None) -> str:
-    """Stable server-minted declarer id for a save that carries no agent_id.
-
-    Distinct client apps become distinct declarers, but one app cannot confirm
-    itself: the same (token, user agent) always mints the same id, so a repeat
-    save only grows evidence and never reaches the second-distinct-declarer
-    confirmation. Both inputs are client-asserted (a caller can spoof its user
-    agent); accepted low-stakes risk, since a forged declarer buys only a
-    higher provisional weight on a relation it declared anyway.
-    """
     material = f"{token or ''}|{user_agent or 'unknown'}"
     return "auto-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
@@ -58,15 +49,6 @@ def style_suggestion(key: str, value: str) -> str | None:
 
 
 def record_edges(conn: sqlite3.Connection, key: str, parent_key: str | None = None) -> None:
-    """Emit graph edges for a written row (graph Phase 0).
-
-    Additive only; INSERT OR IGNORE keeps re-saves idempotent. `derived_from`
-    links a newly created key to the parent it came from (version/split) and is
-    never emitted on an update, because an update creates no new key lineage.
-    `mentions` links any dotted key to its leading segment, a VIRTUAL entity
-    node (no entities table, no node row). Raw DML: INSERT OR IGNORE has no
-    single-call ORM form; writes stay on the app connection.
-    """
     now = temporal.now_iso()
     db = memo_db.orm_db(conn)
     if parent_key is not None and parent_key != key:
