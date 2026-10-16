@@ -88,6 +88,29 @@ def ensure_edges(conn: sqlite3.Connection) -> None:
             "INSERT INTO memo_meta(k,v) VALUES('memories_schema_3','applied')")
 
 
+def ensure_aliases(conn: sqlite3.Connection) -> None:
+    """memories_schema_4: aliases + edge_declarers (graph Phase 0.5).
+
+    Same shape as ensure_edges: the tables ARE the Models, so create_tables()
+    on fresh/migrated DBs already builds them; this records the domain
+    migration key and back-fills pre-Model DBs. `aliases` holds agent-declared
+    segment -> canonical pairs; `edge_declarers` holds WHO declared a link
+    (the edges table is pinned to its Phase 0 column set, so agreement state
+    lives beside it rather than on it).
+    """
+    if conn.execute(
+        "SELECT 1 FROM memo_meta WHERE k='memories_schema_4'"
+    ).fetchone():
+        return
+    peewee_db = orm_db(conn)
+    models = [orm_models.Alias, orm_models.EdgeDeclarer]
+    with peewee_db.bind_ctx(models):
+        peewee_db.create_tables(models, safe=True)
+    with conn:
+        conn.execute(
+            "INSERT INTO memo_meta(k,v) VALUES('memories_schema_4','applied')")
+
+
 # (domain, version, op): op(migrator) applies structural alterations via
 # playhouse.migrate (recorded under f"{domain}_schema_{version}").
 MIGRATIONS: list = [("agents", 1, create_agents)]
@@ -217,11 +240,13 @@ def migrate(conn: sqlite3.Connection) -> int:
             peewee_db.create_tables(orm_models.CREATE_MODELS, safe=True)
         ensure_memory_columns(conn)
         ensure_edges(conn)
+        ensure_aliases(conn)
     else:
         with conn:
             conn.executescript(_render())
             ensure_memory_columns(conn)
             ensure_edges(conn)
+            ensure_aliases(conn)
             rebuild_fts(conn)
             return seed(conn)
     with conn:

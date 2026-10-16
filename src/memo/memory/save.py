@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import sqlite3
 import uuid
@@ -19,11 +20,26 @@ from memo.memory.common import (
     grow_stability,
     is_trivia,
 )
+from memo.memory.graph import record_declarations
 from memo.models import orm as orm_models
 from memo.models.orm import Memory as OrmMemory
 
 DATE_IN_KEY_PATTERN = re.compile(r"\d{4}-\d{2}(?:-\d{2})?")
 VALUE_DATE_PREFIX_PATTERN = re.compile(r"\[\d{4}-\d{2}-\d{2}\]")
+
+
+def fallback_agent_id(token: str | None, user_agent: str | None) -> str:
+    """Stable server-minted declarer id for a save that carries no agent_id.
+
+    Distinct client apps become distinct declarers, but one app cannot confirm
+    itself: the same (token, user agent) always mints the same id, so a repeat
+    save only grows evidence and never reaches the second-distinct-declarer
+    confirmation. Both inputs are client-asserted (a caller can spoof its user
+    agent); accepted low-stakes risk, since a forged declarer buys only a
+    higher provisional weight on a relation it declared anyway.
+    """
+    material = f"{token or ''}|{user_agent or 'unknown'}"
+    return "auto-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def style_suggestion(key: str, value: str) -> str | None:
@@ -212,13 +228,22 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
 
 def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
          namespace: str = "default", valid_from=None, valid_until=None,
-         agent_id=None) -> dict:
+         agent_id=None, links=None, aliases=None, token=None,
+         user_agent=None) -> dict:
     call_start = temporal.now_iso()
     receipt = original_save(conn, key, value, type=type, namespace=namespace,
                          valid_from=valid_from, valid_until=valid_until,
                          agent_id=agent_id)
     if "error" in receipt:
         return receipt
+    if receipt.get("action") in ("created", "updated", "superseded"):
+        declarer = agent_id if agent_id else fallback_agent_id(token, user_agent)
+        note = record_declarations(conn, receipt["key"], links, aliases, declarer)
+        if note:
+            if receipt.get("suggestion"):
+                receipt["suggestion"] += "; " + note
+            else:
+                receipt["suggestion"] = note
     maintenance_result = maintenance.run(conn, now=call_start)
     if receipt.get("action") in ("created", "updated", "superseded"):
         receipt["archived"] = maintenance_result["evicted"]

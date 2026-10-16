@@ -39,18 +39,22 @@ def do_memory_search(conn, query, limit=10, namespace="default",
 
 def do_memory_save(conn, key, value, typ="context", namespace="default",
                    valid_from=None, lock=None, valid_until=None,
-                   agent_id=None):
+                   agent_id=None, links=None, aliases=None, token=None,
+                   user_agent=None):
     start = time.perf_counter()
     try:
         if lock is not None:
             with lock:
                 out = save(conn, key, value, type=typ,
                            namespace=namespace, valid_from=valid_from,
-                           valid_until=valid_until, agent_id=agent_id)
+                           valid_until=valid_until, agent_id=agent_id,
+                           links=links, aliases=aliases, token=token,
+                           user_agent=user_agent)
         else:
             out = save(conn, key, value, type=typ, namespace=namespace,
                        valid_from=valid_from, valid_until=valid_until,
-                       agent_id=agent_id)
+                       agent_id=agent_id, links=links, aliases=aliases,
+                       token=token, user_agent=user_agent)
     except Exception as exc:
         return internal_error(exc)
     log_operation("memory_save", namespace, (time.perf_counter() - start) * 1000, 1,

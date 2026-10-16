@@ -5,7 +5,7 @@ import sqlite3
 import sys
 import threading
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from memo import db
 from memo.server.bootstrap import bootstrap_text
@@ -21,6 +21,25 @@ from memo.server.operations import (
     do_skill_update,
 )
 from memo.server.shared import resolve_domains
+
+
+def caller_identity(ctx) -> tuple[str | None, str | None]:
+    """Best-effort (bearer token, user agent) for the current MCP request.
+
+    Only HTTP requests carry these; stdio and in-process calls yield (None,
+    None), so the save mints its fallback declarer from 'unknown' instead.
+    """
+    try:
+        request = ctx.request_context.request if ctx is not None else None
+    except Exception:
+        return None, None
+    headers = getattr(request, "headers", None)
+    if not headers:
+        return None, None
+    authorization = headers.get("authorization") or ""
+    token = (authorization[7:].strip()
+             if authorization[:7].lower() == "bearer " else None)
+    return token, headers.get("user-agent")
 
 
 def server_connect(path: str) -> sqlite3.Connection:
@@ -75,9 +94,15 @@ def build_server(db_path: str, memory_on: bool | None = None,
                         namespace: str = "default",
                         valid_from: str | None = None,
                         valid_until: str | None = None,
-                        agent_id: str | None = None) -> dict:
+                        agent_id: str | None = None,
+                        links: list | None = None,
+                        aliases: list | None = None,
+                        ctx: Context | None = None) -> dict:
+            token, user_agent = caller_identity(ctx)
             return do_memory_save(conn, key, value, type, namespace,
-                                  valid_from, lock, valid_until, agent_id)
+                                  valid_from, lock, valid_until, agent_id,
+                                  links=links, aliases=aliases, token=token,
+                                  user_agent=user_agent)
 
         @server.tool(name="memory_delete", description=DESCRIPTIONS["memory_delete"])
         def memory_delete(key: str,

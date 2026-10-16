@@ -26,8 +26,10 @@ RAW_TAIL: str = (
 
 from memo.models.agents import Agent, AgentState
 from memo.models.memories import (
+    Alias,
     ArchivedMemory,
     Edge,
+    EdgeDeclarer,
     Episode,
     Memory,
     MemoryFTS,
@@ -39,10 +41,10 @@ HEADER: str = ("-- GENERATED from memo.models: do not hand-edit. "
                "Edit src/memo/models/{memories,skills,meta,agents}.py, then run `python -m memo.models`.")
 
 CREATE_MODELS = [MemoMeta, Memory, Episode, Skill, MemoryFTS, Agent, AgentState,
-                 Edge]
+                 Edge, Alias, EdgeDeclarer]
 
 MODELS = [MemoMeta, Memory, MemoryFTS, ArchivedMemory, Episode, Skill,
-          Agent, AgentState, Edge]
+          Agent, AgentState, Edge, Alias, EdgeDeclarer]
 
 
 def render_schema() -> str:
