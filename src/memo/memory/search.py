@@ -15,7 +15,7 @@ from memo.memory.common import (
     fetch_row,
     fts_scores,
 )
-from memo.memory.graph import neighborhood
+from memo.memory.graph import contradiction_flags, neighborhood
 from memo.models import orm as orm_models
 from memo.models.orm import Memory as OrmMemory
 
@@ -167,4 +167,10 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             result.pop("stab"), result.pop("age"), result.pop("status")
             result.pop("created")
             result["updated_at"] = result.pop("updated")
+    # Graph Phase 2: flag each returned hit with the current valid facts it
+    # contradicts. Additive and score-free; the counterpart is never added.
+    for result in scored:
+        flags = contradiction_flags(conn, result["key"], namespace, now)
+        if flags:
+            result["contradictions"] = flags
     return scored

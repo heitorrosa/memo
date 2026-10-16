@@ -115,6 +115,60 @@ def neighborhood(conn: sqlite3.Connection, key: str, depth: int = 1) -> list[dic
     )
 
 
+def current_fact(conn: sqlite3.Connection, key: str, namespace: str, at) -> bool:
+    """True when `key` is a real, current, valid fact in `namespace`.
+
+    A counterpart with no row (a virtual entity node) is not a fact, and a
+    superseded or past-valid_until row is no longer one, so neither can be
+    named by a contradiction flag.
+    """
+    with memo_db.orm_ctx(conn):
+        row = OrmMemory.get_or_none(
+            (OrmMemory.key == key) & (OrmMemory.namespace == namespace))
+    if row is None:
+        return False
+    record = {"status": row.status, "valid_from": row.valid_from,
+              "valid_to": row.valid_to, "valid_until": row.valid_until}
+    return temporal.is_effective(record, at) and not temporal.is_expired(record, at)
+
+
+def contradiction_flags(conn: sqlite3.Connection, key: str, namespace: str,
+                        at) -> list[dict]:
+    """Phase 2 surfacing: contradicts edges touching `key` whose OTHER endpoint
+    is a current, valid fact in `namespace`.
+
+    Flag only: returns [{key, declarers, weight}] (declarers = distinct agent
+    ids from edge_declarers, weight = stored edge weight, 0.0 for contradicts)
+    ordered by counterpart key. The counterpart is never force-included in a
+    result set; the flag only names it.
+    """
+    with memo_db.orm_ctx(conn):
+        rows = list(
+            OrmEdge.select(OrmEdge.src_key, OrmEdge.dst_key, OrmEdge.weight)
+            .where((OrmEdge.rel == "contradicts")
+                   & ((OrmEdge.src_key == key) | (OrmEdge.dst_key == key)))
+            .tuples())
+        declared = {
+            (src, dst): names
+            for src, dst, names in (
+                OrmEdgeDeclarer.select(OrmEdgeDeclarer.src_key,
+                                       OrmEdgeDeclarer.dst_key,
+                                       OrmEdgeDeclarer.declarers)
+                .where((OrmEdgeDeclarer.rel == "contradicts")
+                       & ((OrmEdgeDeclarer.src_key == key)
+                          | (OrmEdgeDeclarer.dst_key == key)))
+                .tuples())
+        }
+    flags = []
+    for src, dst, weight in rows:
+        other = dst if src == key else src
+        if not current_fact(conn, other, namespace, at):
+            continue
+        names = [name for name in (declared.get((src, dst)) or "").split(",") if name]
+        flags.append({"key": other, "declarers": names, "weight": weight})
+    return sorted(flags, key=lambda flag: flag["key"])
+
+
 def key_exists(conn: sqlite3.Connection, key: str) -> bool:
     """A link target exists as a memory key OR as a virtual entity node.
 
