@@ -14,7 +14,7 @@ const token = () => process.env.MEMO_TOKEN ?? "";
 
 // opencode's native global skills dir (where bare `skill`/skill_create resolve).
 const defaultSkillsDir = () =>
-  path.join(process.env.HOME ?? "~", ".config/opencode/skills");
+  path.join(process.env.HOME ?? process.env.USERPROFILE ?? "~", ".config/opencode/skills");
 
 const HERMES_BLOCK = new URL("./templates/hermes-block.md", import.meta.url);
 
