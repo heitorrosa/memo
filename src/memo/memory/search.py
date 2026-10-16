@@ -1,14 +1,83 @@
 from __future__ import annotations
 
 import math
+import os
 import sqlite3
 
 from memo import db as memo_db
 from memo import embeddings, errors, rank, temporal
 from memo import prompts as prompt_store
-from memo.memory.common import BETA, R_FLOOR, STABILITY, S_CAP_X, fts_scores
+from memo.memory.common import (
+    BETA,
+    R_FLOOR,
+    STABILITY,
+    S_CAP_X,
+    fetch_row,
+    fts_scores,
+)
+from memo.memory.graph import neighborhood
 from memo.models import orm as orm_models
 from memo.models.orm import Memory as OrmMemory
+
+# Graph Phase 1: flag-gated neighbor expansion. Off (the default) must be
+# byte-identical to the pre-expansion retrieval path, so the flag is read per
+# request and the whole block is skipped when it is unset.
+EXPAND_TOP_K = 5
+EXPAND_DECAY = 0.6
+EXPAND_MAX_ADDED = 20
+
+
+def expand_enabled() -> bool:
+    """MEMO_GRAPH_EXPAND, read per request (not at import) so tests can flip it."""
+    return os.getenv("MEMO_GRAPH_EXPAND", "").strip().lower() in ("1", "true", "yes")
+
+
+def expand_candidates(conn: sqlite3.Connection, scored: list[dict],
+                      namespace: str) -> list[dict]:
+    """Propose 1-hop neighbors of the top hits as extra candidates (Phase 1).
+
+    Graph proposes, rank disposes: a neighbor enters the pool with
+    source_score x stored_edge_weight x 0.6, dedup by key keeps the max score,
+    and at most 20 neighbor keys are merged. `contradicts` edges are flag-only
+    and never contribute. Pure read; the fusion formula is untouched.
+    """
+    by_key = {row["key"]: row for row in scored}
+    proposed: dict[str, float] = {}
+    for source in sorted(scored, key=lambda row: row["score"], reverse=True)[:EXPAND_TOP_K]:
+        for neighbor in neighborhood(conn, source["key"], 1):
+            if neighbor["rel"] == "contradicts":
+                continue
+            key = neighbor["key"]
+            score = source["score"] * neighbor["weight"] * EXPAND_DECAY
+            if key not in proposed or score > proposed[key]:
+                proposed[key] = score
+    at = temporal.parse_ts(temporal.now_iso())
+    merged = 0
+    for key, score in proposed.items():
+        if merged >= EXPAND_MAX_ADDED:
+            break
+        existing = by_key.get(key)
+        if existing is not None:
+            merged += 1
+            if score > existing["score"]:
+                existing["score"] = score
+            continue
+        row = fetch_row(conn, key, namespace)
+        if row is None:
+            continue
+        if temporal.is_expired(row, at) or not temporal.in_window(row, at):
+            continue
+        age = max(0.0, (at - temporal.parse_ts(row["created_at"])).total_seconds() / 86400)
+        candidate = {
+            "key": row["key"], "value": row["value"], "type": row["type"],
+            "score": score, "age_days": int(age), "uses": row["uses"] + 1,
+            "stab": row["stability"], "age": age, "updated": row["updated_at"],
+            "created": row["created_at"], "status": row["status"],
+        }
+        by_key[key] = candidate
+        scored.append(candidate)
+        merged += 1
+    return scored
 
 
 def search(conn: sqlite3.Connection, query: str, limit: int = 10,
@@ -77,6 +146,8 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             "age_days": int(age), "uses": uses + 1,
             "stab": stability, "age": age, "updated": updated_at, "created": created_at, "status": status})
 
+    if expand_enabled():
+        scored = expand_candidates(conn, scored, namespace)
     if type is not None:
         scored = [result for result in scored if result["type"] == type]
     if min_score is not None:
