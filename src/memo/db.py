@@ -67,6 +67,27 @@ def ensure_memory_columns(conn: sqlite3.Connection) -> None:
             "INSERT INTO memo_meta(k,v) VALUES('memories_schema_2','applied')")
 
 
+def ensure_edges(conn: sqlite3.Connection) -> None:
+    """memories_schema_3: edges table (graph Phase 0).
+
+    The table IS the Edge Model, so create_tables()/render_schema() already
+    build it on fresh and migrated DBs; this mirrors the memories_schema_2
+    pattern by recording the domain migration key and back-filling the table
+    on DBs written before the Model existed. No index beyond the PK: the
+    table is small and every lookup is an exact 3-column PK scan.
+    """
+    if conn.execute(
+        "SELECT 1 FROM memo_meta WHERE k='memories_schema_3'"
+    ).fetchone():
+        return
+    peewee_db = orm_db(conn)
+    with peewee_db.bind_ctx([orm_models.Edge]):
+        peewee_db.create_tables([orm_models.Edge], safe=True)
+    with conn:
+        conn.execute(
+            "INSERT INTO memo_meta(k,v) VALUES('memories_schema_3','applied')")
+
+
 # (domain, version, op): op(migrator) applies structural alterations via
 # playhouse.migrate (recorded under f"{domain}_schema_{version}").
 MIGRATIONS: list = [("agents", 1, create_agents)]
@@ -195,10 +216,12 @@ def migrate(conn: sqlite3.Connection) -> int:
         with peewee_db.bind_ctx(orm_models.CREATE_MODELS):
             peewee_db.create_tables(orm_models.CREATE_MODELS, safe=True)
         ensure_memory_columns(conn)
+        ensure_edges(conn)
     else:
         with conn:
             conn.executescript(_render())
             ensure_memory_columns(conn)
+            ensure_edges(conn)
             rebuild_fts(conn)
             return seed(conn)
     with conn:

@@ -41,6 +41,28 @@ def style_suggestion(key: str, value: str) -> str | None:
     return "; ".join(notes) if notes else None
 
 
+def record_edges(conn: sqlite3.Connection, key: str, parent_key: str | None = None) -> None:
+    """Emit graph edges for a written row (graph Phase 0).
+
+    Additive only; INSERT OR IGNORE keeps re-saves idempotent. `derived_from`
+    links a newly created key to the parent it came from (version/split) and is
+    never emitted on an update, because an update creates no new key lineage.
+    `mentions` links any dotted key to its leading segment, a VIRTUAL entity
+    node (no entities table, no node row). Raw DML: INSERT OR IGNORE has no
+    single-call ORM form; writes stay on the app connection.
+    """
+    now = temporal.now_iso()
+    db = memo_db.orm_db(conn)
+    if parent_key is not None and parent_key != key:
+        db.execute_sql(
+            "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,weight,created_at)"
+            " VALUES(?,?,'derived_from',1.0,?)", (key, parent_key, now))
+    if "." in key:
+        db.execute_sql(
+            "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,weight,created_at)"
+            " VALUES(?,?,'mentions',1.0,?)", (key, key.split(".")[0], now))
+
+
 def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
          namespace: str = "default", valid_from=None, valid_until=None,
          agent_id=None) -> dict:
@@ -91,6 +113,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                 **stamp, **refresh_expiry)
              .where((OrmMemory.key == key) & (OrmMemory.namespace == namespace))
              .execute())
+            record_edges(conn, key)
         return with_advisory({"key": key, "action": "updated"})
 
     with memo_db.orm_ctx(conn):
@@ -121,6 +144,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     valid_until=effective_valid_until, agent_id=agent_id,
                     status="current", family_id=family_id,
                     superseded_by=None, relation_type="qualifies")
+                record_edges(conn, key, hit_key)
             return with_advisory({"key": key, "action": "created"})
         elif outcome == "extends":
             value_embedding = embeddings.embed([value])[0]
@@ -135,6 +159,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     **stamp, **refresh_expiry)
                  .where((OrmMemory.key == hit_key) & (OrmMemory.namespace == namespace))
                  .execute())
+                record_edges(conn, hit_key)
             return with_advisory({"key": hit_key, "action": "updated"})
         elif outcome == "contradicts":
             relation = "corrects" if temporal.CORRECTION_PATTERN.search(value) else "supersedes"
@@ -152,6 +177,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     valid_until=effective_valid_until, agent_id=agent_id,
                     status="current", family_id=hit_row["family_id"],
                     superseded_by=None, relation_type=relation)
+            record_edges(conn, key, hit_key)
             return with_advisory({"key": key, "action": "superseded"})
         else:
             age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(hit_row["created_at"])).total_seconds() / 86400)
@@ -164,6 +190,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     **stamp, **refresh_expiry)
                  .where((OrmMemory.key == hit_key) & (OrmMemory.namespace == namespace))
                  .execute())
+                record_edges(conn, hit_key)
             return with_advisory({"key": hit_key, "action": "updated"})
 
     if is_trivia(value):
@@ -179,6 +206,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
             valid_until=effective_valid_until, agent_id=agent_id,
             status="current", family_id=uuid.uuid4().hex,
             superseded_by=None, relation_type=None)
+        record_edges(conn, key)
     return with_advisory({"key": key, "action": "created"})
 
 

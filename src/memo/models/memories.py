@@ -69,6 +69,26 @@ class MemoryFTS(FTS5Model):
         options = {"content": "memories", "content_rowid": "rowid"}
 
 
+class Edge(BaseMemoryModel):
+    """Graph edges (Phase 0). Entity nodes are VIRTUAL: a dotted key's leading
+    segment (e.g. `homelab` in `homelab.memory.x`) is a node with no row here.
+    family_id stays version lineage; no edge rel encodes versioning.
+    """
+
+    src_key = TextField()
+    dst_key = TextField()
+    rel = TextField()
+    weight = FloatField(default=1.0, constraints=[SQL("DEFAULT 1.0")])
+    created_at = TextField()
+
+    class Meta:
+        table_name = "edges"
+        primary_key = CompositeKey("src_key", "dst_key", "rel")
+        constraints = [
+            Check("rel IN ('mentions','supports','contradicts','derived_from')"),
+        ]
+
+
 class ArchivedMemory(BaseMemoryModel):
     key = TextField(null=True)
     namespace = TextField(null=True)
