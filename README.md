@@ -2,11 +2,7 @@
 
 <p align="center">One durable memory and reusable skills for all your agents.</p>
 
-memo is an MCP server that gives multiple agents shared memory and reusable workflows. A single Python server owns the SQLite database. File-based harnesses sync `SKILL.md` files, while web harnesses can use a skill index in context.
-
-## Architecture
-
-One `memo` container is the sole writer of `memo.db` in WAL mode. Harnesses connect over Streamable HTTP at `/mcp`. The memory domain handles facts, ranking, and temporal rules; the skills domain handles skill bodies, versions, and sync deltas. Bounded maintenance runs after relevant writes. The OpenCode plugin injects memory into prompts, syncs skills at session start, and pushes local skill edits without opening the database directly.
+memo is an MCP server that gives multiple agents shared memory and reusable workflows. One Python process owns the SQLite database (`memo.db`, WAL mode) and is the only writer, exposing eight tools: `memory_search`, `memory_save`, `memory_delete`, `skill_sync`, `skill_get`, `skill_put`, `skill_update`, `skill_install`.
 
 ## Quickstart
 
@@ -16,9 +12,9 @@ Prerequisites: Docker (Engine or Desktop) with the Compose plugin.
 .\install.ps1
 ```
 
-`install.ps1` is idempotent. It writes `.env` with a generated `MEMO_TOKEN`, fetches the embedding weights into `./models` through a temporary container (no local Python), starts the published image from `docker-compose.user.yml`, and prints the health URL. The token lives in `./.env` (gitignored).
+install.ps1 is idempotent. It writes `.env` with a generated `MEMO_TOKEN`, fetches the embedding weights into `./models` through a temporary container (no local Python), starts the published image from `docker-compose.user.yml`, and prints the health URL. The token lives in `./.env` (gitignored).
 
-To run the three steps yourself instead:
+To run the three steps yourself:
 
 ```sh
 docker run --rm -v "$PWD/models:/models" -v "$PWD/scripts:/scripts:ro" -e FASTEMBED_CACHE_PATH=/models ghcr.io/heitorrosa/memo:3.0.0 python /scripts/fetch_model.py
@@ -26,133 +22,51 @@ docker compose -f docker-compose.user.yml pull
 docker compose -f docker-compose.user.yml up -d
 ```
 
-To connect a chatbot, see [Connect a harness](#connect-a-harness). The server stores its database in `./data/memo.db` and exposes `/health` and `/mcp`. Health checks are unauthenticated; MCP requests require the bearer token.
+The server stores its database in `./data/memo.db` and serves `/health` (unauthenticated) and `/mcp` (bearer token required) on port 5000. For local development, run `pip install .` and start the CLI against an explicit database path; the optional stdio transport is for offline or CI use. Never run two server processes against the same database.
 
-For local development, install with `pip install .` and run the CLI with an explicit database path. The optional stdio transport is intended for offline or CI use. Never run multiple server processes against the same database.
-
-The embedding model (`sentence-transformers/all-MiniLM-L6-v2`) is vendored into the gitignored `./models` directory and bind-mounted read-only at `/models`, so builds and container recreates never re-download it. On a fresh clone, populate it once (after `pip install .`):
+The embedding model (`sentence-transformers/all-MiniLM-L6-v2`, 384 dimensions, loaded by fastembed) is vendored into the gitignored `./models` directory and mounted read-only at `/models`, so builds and container recreates never re-download it. On a fresh clone, populate it once after `pip install .`:
 
 ```sh
 python scripts/fetch_model.py
 ```
 
-Compose points fastembed at the mount (`FASTEMBED_CACHE_PATH=/models`) and sets `HF_HUB_OFFLINE=1`, so the server reads the weights from `./models` and fails loudly rather than silently downloading if the mount is empty.
+The container reads weights from the `/models` mount; an empty mount fails loudly instead of silently downloading.
 
-## Connect a harness
+## Configuration
 
-Add Memo as a remote MCP server in `opencode.json`:
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MEMO_TOKEN` | required for HTTP mode | Bearer token for `/mcp`. Send `Authorization: Bearer <token>` (preferred), or `?access_token=<token>` on the `/mcp` URL for clients that cannot set headers; the header wins when both are present. URL tokens leak into proxy and browser logs. |
+| `MEMO_LOG` | unset | Set `debug` to log maintenance passes. |
+| `MEMO_ENDPOINT` | `http://localhost:8000/mcp` | Server URL used by the OpenCode plugin. |
 
-```json
-{
-  "mcp": {
-    "memo": {
-      "type": "remote",
-      "url": "http://localhost:8000/mcp",
-      "headers": {
-        "Authorization": "Bearer ${MEMO_TOKEN}"
-      }
-    }
-  }
-}
-```
+The CLI also supports port selection, health checks, database backups, and tool-list output.
 
-For remote clients, replace the URL with a reachable HTTPS endpoint and keep authentication enabled. See [`opencode-memo/README.md`](opencode-memo/README.md) for plugin setup and sync behavior. Harnesses without remote MCP support can use the `skill_sync` bundle and `bootstrap` prompt as a fallback.
-
-### Configuring for Web
-
-Anyone wiring a web harness (ChatGPT, Claude.ai) should paste the contents of [`INSTRUCTIONS.md`](INSTRUCTIONS.md) into the harness system prompt or instructions field. It is the client-side memory routine: search at the start, save durable facts while working, and save outcomes at the end. Clients that cannot set headers, such as ChatGPT custom MCP, authenticate with the `?access_token=<token>` URL form from Configuration; clients with header support use `Authorization: Bearer <token>`.
-
-## Tools
-
-### Memory
-
-- `memory_search` retrieves ranked memories. Use it before answering personal, preference, or project-specific questions.
-- `memory_save` stores a durable fact and classifies it as an update, extension, qualification, contradiction, or new fact. Trivial or ephemeral input is rejected with a receipt.
-- `memory_delete` soft-deletes a memory and archives the row.
-
-### Skills
-
-- `skill_sync` retrieves file write/delete deltas or the skill index. Call it at session start and repeat with a filter if the response is truncated.
-- `skill_get` fetches a skill body, optionally at a specific version.
-- `skill_put` creates or updates a skill and returns its hash and version. Identical content does not create a new version.
-- `skill_update` appends a dated revision without rewriting prior history.
-- `skill_install` imports a `SKILL.md` from a skills.sh shorthand or GitHub reference.
-
-The `bootstrap` prompt and `memo://summary` resource provide session orientation, top memories, the skill index, and a stats line. Errors use a structured `{error, detail}` response.
-
-## How it works
-
-A single server authenticates MCP requests, dispatches memory and skill operations, and writes to SQLite. Maintenance runs as a bounded pass after relevant operations.
+## Architecture
 
 ```mermaid
 flowchart LR
-  A[Harness client] ==> B[HTTP bearer gate]
-  B ==> C[Tool dispatch with lock]
-  C ==> D[Memory domain]
-  C ==> E[Skills domain]
-  D ==> F[SQLite single writer]
-  E ==> F
-  C ==> G[Janitor pass]
-  G ==> F
+    A[memory_save with links, aliases] --> B[validate: targets exist, rel in fixed vocab, no versioning claims]
+    B --> C[save ladder: fuzzy match, classify, supersede]
+    C --> D[record_edges: mentions, derived_from]
+    C --> E[record_declarations: agreement weights 0.5 provisional, 1.0 confirmed]
+    D --> F[(edges)]
+    E --> G[(aliases)]
+    B -. rejected declarations .-> H[receipt suggestion, save still lands]
 ```
-
-A memory save embeds the value, stores the memory, lets the full-text index update, then runs bounded maintenance and returns a receipt.
 
 ```mermaid
-sequenceDiagram
-  participant H as Harness
-  participant S as Server
-  participant D as Store
-  H ->> S: memory_save key value
-  S ->> D: embed value to 384 BLOB
-  D ->> S: vector bytes
-  S ->> D: insert Memory row
-  D ->> S: row stored
-  S ->> D: FTS trigger indexes row
-  S ->> D: janitor bounded pass
-  S ->> H: receipt action plus key
+flowchart LR
+    Q[query] --> C[candidates: FTS-first, 500 bound, deterministic order]
+    C --> X[expand one hop: source score x edge weight x 0.6, max +20]
+    X --> R[rank fusion 0.6V+0.25T+0.15R, formula untouched]
+    R --> F[contradiction flags attached, never scored]
 ```
 
-SQLite stores live memories, full-text search data, archived rows, episode summaries, and skill state. Skill deletions are represented as tombstones until they expire.
 
-```mermaid
-flowchart TB
-  M[Memory key plus namespace] ==> FTS[MemoryFTS key value]
-  M ==> AM[ArchivedMemory clone plus reason]
-  M ==> EP[Episode rollup summary]
-  SK[Skill name] ==> SK2[Skill row state live or tombstone]
-  MM[MemoMeta version seed] ==> M
-```
+## Connect a harness
 
-- **Memory:** combines semantic similarity, full-text matching, and retention. Memories support temporal validity, supersession, and archiving.
-- **Skills:** stores skill bodies and versions, and tracks file deltas and tombstones for synchronization.
-- **OpenCode plugin:** injects memory, syncs skills at session start, and pushes local skill edits after writes.
-- **Maintenance:** evicts low-value memories when over capacity, archives stale context, rolls older context into episode summaries, and expires old tombstones.
-
-!
-## Configuration
-
-Required:
-
-- `MEMO_TOKEN`: bearer token for HTTP MCP requests. Send it as an `Authorization: Bearer <token>` header (preferred), or — for clients that cannot set headers, such as ChatGPT custom MCP — as the `?access_token=<token>` query parameter on the `/mcp` URL. If both are present the header wins. URL tokens are less safe: they leak into proxy, gateway, and browser logs, so use the header wherever the client supports it.
-
-Optional:
-
-- `MEMO_DISABLE_MEMORY=1`: disable memory tools and related summary content.
-- `MEMO_DISABLE_SKILLS=1`: disable skill tools and the skill index.
-- `MEMO_ENDPOINT`: client endpoint, default `http://localhost:8000/mcp`.
-- `MEMO_LOG`: log level, `debug`, `info`, or `warn`.
-- `MEMO_TRUSTED_HOSTS`: optional tightening of the `/mcp` `Host` allowlist. By default every `Host` is accepted — the bearer token is the security boundary (mandatory, constant-time, 401 before dispatch), and `Host` validation is only DNS-rebinding defence-in-depth that would otherwise break on every tunnel rotation (trycloudflare/funnel hostnames change per restart). `Origin` stays gated to localhost by default, so browsers are still origin-gated. Set this to a comma-separated list (e.g. `memo.example.com`) to restrict `/mcp` to exactly those hosts plus localhost; each entry is also allowed with any port.
-- `MEMO_GRAPH_EXPAND`: graph neighbor expansion in retrieval. On by default; set `MEMO_GRAPH_EXPAND=0` (or `false`/`off`, case-insensitively) to disable it and get unexpanded `memory_search` results.
-
-Boolean flags also accept `true` or `yes`, case-insensitively. Both domains cannot be disabled at once. The CLI supports HTTP mode, port selection, health checks, database backups, and tool-list output for transport parity checks. Backups can be made while the server is running using the CLI backup command.
-
-## TODO
-
-- [ ] Graph links for the memories and skills
-- [ ] Skill Janitor
-- [ ] Retrieval gate to force the memory to be read using a System1 Decision model
-- [ ] Management dashboard
+For web harnesses (ChatGPT, Claude.ai), paste [`INSTRUCTIONS.md`](INSTRUCTIONS.md) into the system prompt or instructions field; it is the client-side routine to search first, save durable facts while working, and save outcomes at the end. Remote MCP clients point at `http://localhost:5000/mcp`, and clients that cannot set headers authenticate with `?access_token=<token>`. OpenCode setup and skill sync live in [`opencode-memo/README.md`](opencode-memo/README.md).
 
 ## License
 
