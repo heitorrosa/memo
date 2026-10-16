@@ -73,7 +73,8 @@ def test_valid_at_future_excludes(tmp_path):
     conn.close()
 
 
-def test_valid_at_past_window(tmp_path):
+def test_valid_at_past_window(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMO_GRAPH_EXPAND", "0")
     conn = mem(tmp_path)
     r = save(conn, "editor.indent", "prefers tabs", valid_from="2026-01-10")
     assert r["action"] == "created"
@@ -86,7 +87,8 @@ def test_valid_at_past_window(tmp_path):
     conn.close()
 
 
-def test_as_known_at(tmp_path):
+def test_as_known_at(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMO_GRAPH_EXPAND", "0")
     conn = mem(tmp_path)
     save(conn, "editor.indent", "prefers tabs")
     ca = conn.execute(

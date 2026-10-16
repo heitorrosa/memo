@@ -102,7 +102,10 @@ def run_query(tmp_path, name, query, flag, fresh_key=None, limit=10):
     assert db.migrate(conn) == 3
     seed(conn, fresh_key=fresh_key)
     previous = os.environ.get("MEMO_GRAPH_EXPAND")
-    os.environ["MEMO_GRAPH_EXPAND"] = flag
+    if flag is None:
+        os.environ.pop("MEMO_GRAPH_EXPAND", None)
+    else:
+        os.environ["MEMO_GRAPH_EXPAND"] = flag
     try:
         hits = search(conn, query, limit=limit)
     finally:
@@ -208,3 +211,147 @@ def test_expansion_caps_merged_neighbors_at_twenty(tmp_path):
     boosted = [hit for hit in hits
                if hit["key"] in child_set and hit["score"] > 0.35]
     assert len(boosted) == 20
+
+
+def test_expand_enabled_semantics(monkeypatch):
+    for value in (None, "", "1", "true", "yes", "on", "random"):
+        if value is None:
+            monkeypatch.delenv("MEMO_GRAPH_EXPAND", raising=False)
+        else:
+            monkeypatch.setenv("MEMO_GRAPH_EXPAND", value)
+        assert search_module.expand_enabled() is True
+    for value in ("0", "false", "off", "FALSE", "Off", " 0 "):
+        monkeypatch.setenv("MEMO_GRAPH_EXPAND", value)
+        assert search_module.expand_enabled() is False
+
+
+def test_default_env_enables_expansion(tmp_path, monkeypatch):
+    calls = []
+    original = search_module.expand_candidates
+    monkeypatch.setattr(
+        search_module, "expand_candidates",
+        lambda *args, **kwargs: calls.append(1) or original(*args, **kwargs))
+    hits = run_query(tmp_path, "default_on", ANCHOR_TOKENS[0], None,
+                     fresh_key=anchor_key(TOPICS[0]))
+    assert calls == [1]
+    related = {anchor_key(TOPICS[0]), *child_keys(TOPICS[0])}
+    assert len(related & {hit["key"] for hit in hits}) >= 2
+
+
+def test_default_env_improves_co_retrieval(tmp_path):
+    related = {anchor_key(TOPICS[0]), *child_keys(TOPICS[0])}
+    off_keys = {hit["key"] for hit in run_query(
+        tmp_path, "off_default_cmp", ANCHOR_TOKENS[0], "0",
+        fresh_key=anchor_key(TOPICS[0]))}
+    default_keys = {hit["key"] for hit in run_query(
+        tmp_path, "on_default_cmp", ANCHOR_TOKENS[0], None,
+        fresh_key=anchor_key(TOPICS[0]))}
+    assert len(related & off_keys) < len(related & default_keys)
+    assert len(related & default_keys) >= 2
+
+
+WINDOW_ANCHOR = "windowanchor"
+WINDOW_CHILD = "windowchild"
+WINDOW_OLD = "windowold"
+WINDOW_FUTURE = "windowfuture"
+OPEN_SINCE = "2026-01-01"
+PAST_WINDOW = "2026-05-01"
+MID_WINDOW = "2026-01-15"
+KNOWN_AT = "2026-12-01"
+LATER_WINDOW = "2027-06-01"
+
+
+def window_conn(tmp_path, name):
+    conn = db.connect(str(tmp_path / f"{name}.db"))
+    assert db.migrate(conn) == 3
+    return conn
+
+
+def window_hits(conn, query, valid_at=None, as_known_at=None, flag="1", limit=10):
+    previous = os.environ.get("MEMO_GRAPH_EXPAND")
+    os.environ["MEMO_GRAPH_EXPAND"] = flag
+    try:
+        kwargs = {}
+        if valid_at is not None:
+            kwargs["valid_at"] = valid_at
+        if as_known_at is not None:
+            kwargs["as_known_at"] = as_known_at
+        return search(conn, query, limit=limit, **kwargs)
+    finally:
+        if previous is None:
+            os.environ.pop("MEMO_GRAPH_EXPAND", None)
+        else:
+            os.environ["MEMO_GRAPH_EXPAND"] = previous
+
+
+def window_link(conn, key, value, parent, valid_from=None, valid_until=None):
+    for declarer in ("A" * 8, "B" * 8):
+        save(conn, key, value, links=[{"to": parent, "rel": "derived_from"}],
+             agent_id=declarer, valid_from=valid_from, valid_until=valid_until)
+
+
+def scores(hits):
+    return {hit["key"]: hit["score"] for hit in hits}
+
+
+def test_expansion_honors_valid_at_window(tmp_path):
+    conn = window_conn(tmp_path, "expand_window_past")
+    save(conn, "lab.anchor", f"also {WINDOW_ANCHOR}", valid_from=OPEN_SINCE)
+    window_link(conn, "lab.child", f"also {WINDOW_CHILD}", "lab.anchor")
+    backdate(conn, ["lab.child"], 60)
+    past_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=PAST_WINDOW))
+    past_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=PAST_WINDOW, flag="0"))
+    now_on = scores(window_hits(conn, WINDOW_ANCHOR))
+    now_off = scores(window_hits(conn, WINDOW_ANCHOR, flag="0"))
+    conn.close()
+    assert "lab.anchor" in past_on
+    assert "lab.child" not in past_on
+    assert set(past_on) == set(past_off)
+    assert now_on["lab.child"] > now_off["lab.child"]
+
+
+def test_expansion_honors_past_only_neighbor(tmp_path):
+    conn = window_conn(tmp_path, "expand_window_old")
+    save(conn, "lab.anchor", f"also {WINDOW_ANCHOR}", valid_from=OPEN_SINCE)
+    window_link(conn, "lab.old", f"also {WINDOW_OLD}", "lab.anchor",
+                valid_from=OPEN_SINCE, valid_until="2026-02-01")
+    backdate(conn, ["lab.old"], 60)
+    historical_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=MID_WINDOW))
+    historical_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=MID_WINDOW, flag="0"))
+    present = scores(window_hits(conn, WINDOW_ANCHOR))
+    conn.close()
+    assert historical_on["lab.old"] > historical_off["lab.old"]
+    assert "lab.old" not in present
+
+
+def test_expansion_honors_as_known_at(tmp_path):
+    conn = window_conn(tmp_path, "expand_window_known")
+    save(conn, "lab.anchor", f"also {WINDOW_ANCHOR}", valid_from=OPEN_SINCE)
+    window_link(conn, "lab.future", f"also {WINDOW_FUTURE}", "lab.anchor",
+                valid_from="2027-01-01")
+    backdate(conn, ["lab.future"], 60)
+    known = scores(window_hits(conn, WINDOW_ANCHOR, as_known_at=KNOWN_AT))
+    windowed = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=KNOWN_AT))
+    later_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW))
+    later_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW, flag="0"))
+    conn.close()
+    assert "lab.anchor" in known
+    assert "lab.future" not in known
+    assert set(known) == set(windowed)
+    assert later_on["lab.future"] > later_off["lab.future"]
+
+
+def test_expansion_time_precedence(tmp_path):
+    conn = window_conn(tmp_path, "expand_window_precedence")
+    save(conn, "lab.anchor", f"also {WINDOW_ANCHOR}", valid_from=OPEN_SINCE)
+    window_link(conn, "lab.future", f"also {WINDOW_FUTURE}", "lab.anchor",
+                valid_from="2027-01-01")
+    backdate(conn, ["lab.future"], 60)
+    implicit = scores(window_hits(conn, WINDOW_ANCHOR, as_known_at=KNOWN_AT))
+    explicit_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW,
+                                     as_known_at=KNOWN_AT))
+    explicit_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW,
+                                      as_known_at=KNOWN_AT, flag="0"))
+    conn.close()
+    assert "lab.future" not in implicit
+    assert explicit_on["lab.future"] > explicit_off["lab.future"]

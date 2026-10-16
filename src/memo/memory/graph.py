@@ -66,11 +66,13 @@ def neighbors(conn: sqlite3.Connection, node: str) -> list[tuple[str, str, float
     ]
 
 
-def neighborhood(conn: sqlite3.Connection, key: str, depth: int = 1) -> list[dict]:
+def neighborhood(conn: sqlite3.Connection, key: str, depth: int = 1,
+                 at=None) -> list[dict]:
     if depth < 1:
         return []
     depth = min(depth, MAX_DEPTH)
-    at = temporal.parse_ts(temporal.now_iso())
+    if at is None:
+        at = temporal.parse_ts(temporal.now_iso())
     found: dict[str, dict] = {}
     visited = {key}
     frontier = [key]

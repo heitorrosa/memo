@@ -25,22 +25,23 @@ EXPAND_MAX_ADDED = 20
 
 
 def expand_enabled() -> bool:
-    return os.getenv("MEMO_GRAPH_EXPAND", "").strip().lower() in ("1", "true", "yes")
+    return os.getenv("MEMO_GRAPH_EXPAND", "").strip().lower() not in ("0", "false", "off")
 
 
 def expand_candidates(conn: sqlite3.Connection, scored: list[dict],
-                      namespace: str) -> list[dict]:
+                      namespace: str, at=None) -> list[dict]:
+    now = temporal.parse_ts(temporal.now_iso())
+    at = now if at is None else at
     by_key = {row["key"]: row for row in scored}
     proposed: dict[str, float] = {}
     for source in sorted(scored, key=lambda row: row["score"], reverse=True)[:EXPAND_TOP_K]:
-        for neighbor in neighborhood(conn, source["key"], 1):
+        for neighbor in neighborhood(conn, source["key"], 1, at):
             if neighbor["rel"] == "contradicts":
                 continue
             key = neighbor["key"]
             score = source["score"] * neighbor["weight"] * EXPAND_DECAY
             if key not in proposed or score > proposed[key]:
                 proposed[key] = score
-    at = temporal.parse_ts(temporal.now_iso())
     merged = 0
     for key, score in proposed.items():
         if merged >= EXPAND_MAX_ADDED:
@@ -56,7 +57,7 @@ def expand_candidates(conn: sqlite3.Connection, scored: list[dict],
             continue
         if temporal.is_expired(row, at) or not temporal.in_window(row, at):
             continue
-        age = max(0.0, (at - temporal.parse_ts(row["created_at"])).total_seconds() / 86400)
+        age = max(0.0, (now - temporal.parse_ts(row["created_at"])).total_seconds() / 86400)
         candidate = {
             "key": row["key"], "value": row["value"], "type": row["type"],
             "score": score, "age_days": int(age), "uses": row["uses"] + 1,
@@ -89,6 +90,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
         except ValueError:
             return errors.err("invalid_input", prompt_store.render(
                 "err_as_known_at", as_known_at=as_known_at))
+    query_time = anchor_time if (valid_at != "now" or known is None) else known
     limit = min(max(1, limit), 50)
 
     query_embedding = embeddings.embed([query])[0]
@@ -113,7 +115,6 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
                     continue
             except ValueError:
                 continue
-        query_time = anchor_time if (valid_at != "now" or known is None) else known
         if temporal.is_expired(row, query_time):
             continue
         if include_superseded:
@@ -136,7 +137,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             "stab": stability, "age": age, "updated": updated_at, "created": created_at, "status": status})
 
     if expand_enabled():
-        scored = expand_candidates(conn, scored, namespace)
+        scored = expand_candidates(conn, scored, namespace, query_time)
     if type is not None:
         scored = [result for result in scored if result["type"] == type]
     if min_score is not None:
