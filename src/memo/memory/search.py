@@ -23,19 +23,74 @@ EXPAND_TOP_K = 5
 EXPAND_DECAY = 0.6
 EXPAND_MAX_ADDED = 20
 
+CANDIDATE_LIMIT = 500
+CANDIDATE_COLUMNS = (
+    "rowid, key, value, type, embedding, stability, score, uses, created_at,"
+    " updated_at, valid_from, valid_to, valid_until, status, family_id")
+
+
+def eligible(row: dict, query_time, known, include_superseded: bool) -> bool:
+    """Retrieval eligibility shared by the initial scan and graph expansion.
+
+    Default (include_superseded=False) admits only rows that are current and
+    inside their validity window at query_time, so superseded rows are excluded
+    everywhere. include_superseded=True admits started, non-expired rows
+    (current or superseded). A row created after as_known_at is never eligible.
+    """
+    if known is not None:
+        try:
+            if temporal.parse_ts(row["created_at"]) > known:
+                return False
+        except ValueError:
+            return False
+    if temporal.is_expired(row, query_time):
+        return False
+    try:
+        valid_to = (temporal.parse_ts(row["valid_to"])
+                    if row.get("valid_to") is not None else None)
+    except ValueError:
+        return False
+    if include_superseded:
+        return temporal.started(row, query_time)
+    if row["status"] == "current":
+        return temporal.in_window(row, query_time)
+    return (known is not None and valid_to is not None and valid_to > known
+            and temporal.in_window(row, query_time))
+
+
+def candidate_rows(conn: sqlite3.Connection, namespace: str, fts_hits: dict) -> list:
+    """Bounded, deterministic candidate pool for the initial scan.
+
+    Order: FTS text matches first (relevance), then rowid ascending (insertion
+    order) as the tail. Relevance, not recency, decides which rows survive the
+    bound, so an old or historically-valid row that matches the query text is
+    never starved by unrelated filler; the rowid tail keeps the scan bounded and
+    reproducible for vector-only matches.
+    """
+    if not fts_hits:
+        return conn.execute(
+            f"SELECT {CANDIDATE_COLUMNS} FROM memories WHERE namespace=?"
+            f" ORDER BY rowid LIMIT {CANDIDATE_LIMIT}", (namespace,)).fetchall()
+    marks = ",".join("?" * len(fts_hits))
+    return conn.execute(
+        f"SELECT {CANDIDATE_COLUMNS} FROM memories WHERE namespace=?"
+        f" ORDER BY (rowid IN ({marks})) DESC, rowid LIMIT {CANDIDATE_LIMIT}",
+        (namespace, *sorted(fts_hits))).fetchall()
+
 
 def expand_enabled() -> bool:
     return os.getenv("MEMO_GRAPH_EXPAND", "").strip().lower() not in ("0", "false", "off")
 
 
 def expand_candidates(conn: sqlite3.Connection, scored: list[dict],
-                      namespace: str, at=None) -> list[dict]:
+                      namespace: str, at=None, known=None,
+                      include_superseded: bool = False) -> list[dict]:
     now = temporal.parse_ts(temporal.now_iso())
     at = now if at is None else at
     by_key = {row["key"]: row for row in scored}
     proposed: dict[str, float] = {}
     for source in sorted(scored, key=lambda row: row["score"], reverse=True)[:EXPAND_TOP_K]:
-        for neighbor in neighborhood(conn, source["key"], 1, at):
+        for neighbor in neighborhood(conn, source["key"], 1, at, namespace):
             if neighbor["rel"] == "contradicts":
                 continue
             key = neighbor["key"]
@@ -55,7 +110,7 @@ def expand_candidates(conn: sqlite3.Connection, scored: list[dict],
         row = fetch_row(conn, key, namespace)
         if row is None:
             continue
-        if temporal.is_expired(row, at) or not temporal.in_window(row, at):
+        if not eligible(row, at, known, include_superseded):
             continue
         age = max(0.0, (now - temporal.parse_ts(row["created_at"])).total_seconds() / 86400)
         candidate = {
@@ -95,38 +150,16 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
 
     query_embedding = embeddings.embed([query])[0]
     fts_hits = fts_scores(conn, query)
-    id_rows = conn.execute(
-        "SELECT rowid, key, value, type, embedding, stability, score, uses,"
-        " created_at, updated_at, valid_from, valid_to, valid_until, status, family_id"
-        " FROM memories WHERE namespace=? LIMIT 500", (namespace,)).fetchall()
+    id_rows = candidate_rows(conn, namespace, fts_hits)
 
     now = temporal.parse_ts(temporal.now_iso())
     scored = []
     for row_id, key, value, kind, embedding, stability, score, uses, created_at, updated_at, valid_from, valid_to, valid_until, status, family_id in id_rows:
-        row = {"status": status, "valid_from": valid_from, "valid_to": valid_to,
+        row = {"key": key, "value": value, "type": kind, "embedding": embedding,
+               "created_at": created_at, "status": status,
+               "valid_from": valid_from, "valid_to": valid_to,
                "valid_until": valid_until}
-        try:
-            valid_to_parsed = temporal.parse_ts(valid_to) if valid_to is not None else None
-        except ValueError:
-            continue
-        if known is not None:
-            try:
-                if temporal.parse_ts(created_at) > known:
-                    continue
-            except ValueError:
-                continue
-        if temporal.is_expired(row, query_time):
-            continue
-        if include_superseded:
-            if not temporal.started(row, query_time):
-                continue
-        elif status == "current":
-            if not temporal.in_window(row, query_time):
-                continue
-        elif known is not None and valid_to_parsed is not None and valid_to_parsed > known \
-                and temporal.in_window(row, query_time):
-            pass
-        else:
+        if not eligible(row, query_time, known, include_superseded):
             continue
         vector_score = embeddings.cosine(query_embedding, embedding)
         text_score = fts_hits.get(row_id, 0.0)
@@ -137,7 +170,8 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             "stab": stability, "age": age, "updated": updated_at, "created": created_at, "status": status})
 
     if expand_enabled():
-        scored = expand_candidates(conn, scored, namespace, query_time)
+        scored = expand_candidates(conn, scored, namespace, query_time, known,
+                                   include_superseded)
     if type is not None:
         scored = [result for result in scored if result["type"] == type]
     if min_score is not None:

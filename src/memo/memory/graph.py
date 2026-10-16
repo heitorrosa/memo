@@ -24,7 +24,8 @@ BASE_WEIGHT = {"derived_from": 1.0, "mentions": 0.5, "supports": 0.8,
 MULTIPLIER = {"candidate": 0.5, "confirmed": 1.0}
 
 
-def valid_node(conn: sqlite3.Connection, key: str, at) -> bool:
+def valid_node(conn: sqlite3.Connection, key: str, at,
+               namespace: str = "default") -> bool:
     with memo_db.orm_ctx(conn):
         rows = list(
             OrmMemory.select(
@@ -33,7 +34,8 @@ def valid_node(conn: sqlite3.Connection, key: str, at) -> bool:
                 OrmMemory.valid_to,
                 OrmMemory.valid_until,
             )
-            .where(OrmMemory.key == key)
+            .where((OrmMemory.key == key)
+                   & (OrmMemory.namespace == namespace))
             .tuples()
         )
     if not rows:
@@ -50,13 +52,15 @@ def valid_node(conn: sqlite3.Connection, key: str, at) -> bool:
     return False
 
 
-def neighbors(conn: sqlite3.Connection, node: str) -> list[tuple[str, str, float]]:
+def neighbors(conn: sqlite3.Connection, node: str,
+              namespace: str = "default") -> list[tuple[str, str, float]]:
     with memo_db.orm_ctx(conn):
         rows = list(
             OrmEdge.select(
                 OrmEdge.src_key, OrmEdge.dst_key, OrmEdge.rel, OrmEdge.weight
             )
-            .where((OrmEdge.src_key == node) | (OrmEdge.dst_key == node))
+            .where(((OrmEdge.src_key == node) | (OrmEdge.dst_key == node))
+                   & (OrmEdge.namespace == namespace))
             .order_by(OrmEdge.src_key, OrmEdge.dst_key, OrmEdge.rel)
             .tuples()
         )
@@ -67,7 +71,7 @@ def neighbors(conn: sqlite3.Connection, node: str) -> list[tuple[str, str, float
 
 
 def neighborhood(conn: sqlite3.Connection, key: str, depth: int = 1,
-                 at=None) -> list[dict]:
+                 at=None, namespace: str = "default") -> list[dict]:
     if depth < 1:
         return []
     depth = min(depth, MAX_DEPTH)
@@ -79,11 +83,11 @@ def neighborhood(conn: sqlite3.Connection, key: str, depth: int = 1,
     for hop in range(1, depth + 1):
         next_frontier = []
         for node in frontier:
-            for other, rel, weight in neighbors(conn, node):
+            for other, rel, weight in neighbors(conn, node, namespace):
                 if other in visited:
                     continue
                 visited.add(other)
-                if not valid_node(conn, other, at):
+                if not valid_node(conn, other, at, namespace):
                     continue
                 found[other] = {
                     "key": other,
@@ -115,6 +119,7 @@ def contradiction_flags(conn: sqlite3.Connection, key: str, namespace: str,
         rows = list(
             OrmEdge.select(OrmEdge.src_key, OrmEdge.dst_key, OrmEdge.weight)
             .where((OrmEdge.rel == "contradicts")
+                   & (OrmEdge.namespace == namespace)
                    & ((OrmEdge.src_key == key) | (OrmEdge.dst_key == key)))
             .tuples())
         declared = {
@@ -124,6 +129,7 @@ def contradiction_flags(conn: sqlite3.Connection, key: str, namespace: str,
                                        OrmEdgeDeclarer.dst_key,
                                        OrmEdgeDeclarer.declarers)
                 .where((OrmEdgeDeclarer.rel == "contradicts")
+                       & (OrmEdgeDeclarer.namespace == namespace)
                        & ((OrmEdgeDeclarer.src_key == key)
                           | (OrmEdgeDeclarer.dst_key == key)))
                 .tuples())
@@ -138,16 +144,21 @@ def contradiction_flags(conn: sqlite3.Connection, key: str, namespace: str,
     return sorted(flags, key=lambda flag: flag["key"])
 
 
-def key_exists(conn: sqlite3.Connection, key: str) -> bool:
+def key_exists(conn: sqlite3.Connection, key: str,
+               namespace: str = "default") -> bool:
     with memo_db.orm_ctx(conn):
-        if OrmMemory.select().where(OrmMemory.key == key).exists():
+        if OrmMemory.select().where(
+            (OrmMemory.key == key) & (OrmMemory.namespace == namespace)
+        ).exists():
             return True
         return OrmMemory.select().where(
-            OrmMemory.key.startswith(key + ".")).exists()
+            (OrmMemory.key.startswith(key + "."))
+            & (OrmMemory.namespace == namespace)).exists()
 
 
-def validate_links(conn: sqlite3.Connection, key: str,
-                   links) -> tuple[list[tuple[str, str]], list[str]]:
+def validate_links(conn: sqlite3.Connection, key: str, links,
+                   namespace: str = "default"
+                   ) -> tuple[list[tuple[str, str]], list[str]]:
     accepted: list[tuple[str, str]] = []
     notes: list[str] = []
     if links is None:
@@ -178,7 +189,7 @@ def validate_links(conn: sqlite3.Connection, key: str,
         if to == key:
             notes.append(f"links: self-link {to!r} rejected")
             continue
-        if rel != "same_as" and not key_exists(conn, to):
+        if rel != "same_as" and not key_exists(conn, to, namespace):
             notes.append(f"links: target {to!r} does not exist")
             continue
         if (to, rel) in seen:
@@ -228,58 +239,62 @@ def validate_aliases(aliases) -> tuple[list[tuple[str, str]], list[str]]:
 
 
 def record_alias(conn: sqlite3.Connection, segment: str, canonical: str,
-                 declarer: str) -> str:
+                 declarer: str, namespace: str = "default") -> str:
     now = temporal.now_iso()
     db = memo_db.orm_db(conn)
     with memo_db.orm_ctx(conn):
         row = OrmAlias.get_or_none(
-            (OrmAlias.segment == segment) & (OrmAlias.canonical == canonical))
+            (OrmAlias.segment == segment) & (OrmAlias.canonical == canonical)
+            & (OrmAlias.namespace == namespace))
     if row is None:
         db.execute_sql(
-            "INSERT INTO aliases(segment,canonical,declarers,status,evidence,"
-            "first_seen,last_seen) VALUES(?,?,?,?,?,?,?)",
-            (segment, canonical, declarer, "candidate", 1, now, now))
+            "INSERT INTO aliases(segment,canonical,namespace,declarers,status,"
+            "evidence,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?)",
+            (segment, canonical, namespace, declarer, "candidate", 1, now, now))
         return "candidate"
     declarers = [name for name in (row.declarers or "").split(",") if name]
     if declarer in declarers:
         db.execute_sql(
             "UPDATE aliases SET evidence=evidence+1, last_seen=?"
-            " WHERE segment=? AND canonical=?", (now, segment, canonical))
+            " WHERE segment=? AND canonical=? AND namespace=?",
+            (now, segment, canonical, namespace))
         return row.status
     declarers.append(declarer)
     db.execute_sql(
         "UPDATE aliases SET declarers=?, status='confirmed',"
-        " evidence=evidence+1, last_seen=? WHERE segment=? AND canonical=?",
-        (",".join(declarers), now, segment, canonical))
+        " evidence=evidence+1, last_seen=?"
+        " WHERE segment=? AND canonical=? AND namespace=?",
+        (",".join(declarers), now, segment, canonical, namespace))
     return "confirmed"
 
 
 def record_link(conn: sqlite3.Connection, src: str, dst: str, rel: str,
-                declarer: str) -> None:
+                declarer: str, namespace: str = "default") -> None:
     now = temporal.now_iso()
     db = memo_db.orm_db(conn)
     with memo_db.orm_ctx(conn):
         edge = OrmEdge.get_or_none(
             (OrmEdge.src_key == src) & (OrmEdge.dst_key == dst)
-            & (OrmEdge.rel == rel))
+            & (OrmEdge.rel == rel) & (OrmEdge.namespace == namespace))
         declared = OrmEdgeDeclarer.get_or_none(
             (OrmEdgeDeclarer.src_key == src) & (OrmEdgeDeclarer.dst_key == dst)
-            & (OrmEdgeDeclarer.rel == rel))
+            & (OrmEdgeDeclarer.rel == rel)
+            & (OrmEdgeDeclarer.namespace == namespace))
     if edge is not None and declared is None:
         return
     if declared is None:
         db.execute_sql(
-            "INSERT INTO edge_declarers(src_key,dst_key,rel,declarers,status,"
-            "evidence,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?)",
-            (src, dst, rel, declarer, "candidate", 1, now, now))
+            "INSERT INTO edge_declarers(src_key,dst_key,rel,namespace,declarers,"
+            "status,evidence,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
+            (src, dst, rel, namespace, declarer, "candidate", 1, now, now))
         status = "candidate"
     else:
         declarers = [name for name in (declared.declarers or "").split(",") if name]
         if declarer in declarers:
             db.execute_sql(
                 "UPDATE edge_declarers SET evidence=evidence+1, last_seen=?"
-                " WHERE src_key=? AND dst_key=? AND rel=?",
-                (now, src, dst, rel))
+                " WHERE src_key=? AND dst_key=? AND rel=? AND namespace=?",
+                (now, src, dst, rel, namespace))
             status = declared.status
         else:
             declarers.append(declarer)
@@ -287,27 +302,29 @@ def record_link(conn: sqlite3.Connection, src: str, dst: str, rel: str,
             db.execute_sql(
                 "UPDATE edge_declarers SET declarers=?, status='confirmed',"
                 " evidence=evidence+1, last_seen=?"
-                " WHERE src_key=? AND dst_key=? AND rel=?",
-                (",".join(declarers), now, src, dst, rel))
+                " WHERE src_key=? AND dst_key=? AND rel=? AND namespace=?",
+                (",".join(declarers), now, src, dst, rel, namespace))
     weight = BASE_WEIGHT[rel] * MULTIPLIER[status]
     db.execute_sql(
-        "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,weight,created_at)"
-        " VALUES(?,?,?,?,?)", (src, dst, rel, weight, now))
+        "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,namespace,weight,"
+        "created_at) VALUES(?,?,?,?,?,?)",
+        (src, dst, rel, namespace, weight, now))
     db.execute_sql(
-        "UPDATE edges SET weight=? WHERE src_key=? AND dst_key=? AND rel=?",
-        (weight, src, dst, rel))
+        "UPDATE edges SET weight=?"
+        " WHERE src_key=? AND dst_key=? AND rel=? AND namespace=?",
+        (weight, src, dst, rel, namespace))
 
 
 def record_declarations(conn: sqlite3.Connection, key: str, links, aliases,
-                        declarer: str) -> str | None:
-    accepted_links, notes = validate_links(conn, key, links)
+                        declarer: str, namespace: str = "default") -> str | None:
+    accepted_links, notes = validate_links(conn, key, links, namespace)
     accepted_aliases, alias_notes = validate_aliases(aliases)
     notes.extend(alias_notes)
     for to, rel in accepted_links:
         if rel == "same_as":
-            record_alias(conn, key, to, declarer)
+            record_alias(conn, key, to, declarer, namespace)
         else:
-            record_link(conn, key, to, rel, declarer)
+            record_link(conn, key, to, rel, declarer, namespace)
     for segment, canonical in accepted_aliases:
-        record_alias(conn, segment, canonical, declarer)
+        record_alias(conn, segment, canonical, declarer, namespace)
     return "; ".join(notes) if notes else None

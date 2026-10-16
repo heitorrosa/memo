@@ -33,8 +33,10 @@ def test_migration_creates_edges_table(tmp_path):
     assert conn.execute(
         "SELECT sql FROM sqlite_master WHERE name='edges'").fetchone() is not None
     info = conn.execute("PRAGMA table_info(edges)").fetchall()
-    assert {r[1] for r in info} == {"src_key", "dst_key", "rel", "weight", "created_at"}
-    assert [r[1] for r in info if r[5]] == ["src_key", "dst_key", "rel"]
+    assert {r[1] for r in info} == {
+        "src_key", "dst_key", "rel", "namespace", "weight", "created_at"}
+    assert [r[1] for r in info if r[5]] == [
+        "src_key", "dst_key", "rel", "namespace"]
     assert conn.execute(
         "SELECT v FROM memo_meta WHERE k='memories_schema_3'").fetchone()[0] == "applied"
     conn.close()

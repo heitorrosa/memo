@@ -48,17 +48,20 @@ def style_suggestion(key: str, value: str) -> str | None:
     return "; ".join(notes) if notes else None
 
 
-def record_edges(conn: sqlite3.Connection, key: str, parent_key: str | None = None) -> None:
+def record_edges(conn: sqlite3.Connection, key: str, parent_key: str | None = None,
+                 namespace: str = "default") -> None:
     now = temporal.now_iso()
     db = memo_db.orm_db(conn)
     if parent_key is not None and parent_key != key:
         db.execute_sql(
-            "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,weight,created_at)"
-            " VALUES(?,?,'derived_from',1.0,?)", (key, parent_key, now))
+            "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,namespace,weight,"
+            "created_at) VALUES(?,?,'derived_from',?,1.0,?)",
+            (key, parent_key, namespace, now))
     if "." in key:
         db.execute_sql(
-            "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,weight,created_at)"
-            " VALUES(?,?,'mentions',1.0,?)", (key, key.split(".")[0], now))
+            "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,namespace,weight,"
+            "created_at) VALUES(?,?,'mentions',?,1.0,?)",
+            (key, key.split(".")[0], namespace, now))
 
 
 def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
@@ -111,7 +114,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                 **stamp, **refresh_expiry)
              .where((OrmMemory.key == key) & (OrmMemory.namespace == namespace))
              .execute())
-            record_edges(conn, key)
+            record_edges(conn, key, namespace=namespace)
         return with_advisory({"key": key, "action": "updated"})
 
     with memo_db.orm_ctx(conn):
@@ -142,7 +145,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     valid_until=effective_valid_until, agent_id=agent_id,
                     status="current", family_id=family_id,
                     superseded_by=None, relation_type="qualifies")
-                record_edges(conn, key, hit_key)
+                record_edges(conn, key, hit_key, namespace=namespace)
             return with_advisory({"key": key, "action": "created"})
         elif outcome == "extends":
             value_embedding = embeddings.embed([value])[0]
@@ -157,7 +160,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     **stamp, **refresh_expiry)
                  .where((OrmMemory.key == hit_key) & (OrmMemory.namespace == namespace))
                  .execute())
-                record_edges(conn, hit_key)
+                record_edges(conn, hit_key, namespace=namespace)
             return with_advisory({"key": hit_key, "action": "updated"})
         elif outcome == "contradicts":
             relation = "corrects" if temporal.CORRECTION_PATTERN.search(value) else "supersedes"
@@ -175,7 +178,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     valid_until=effective_valid_until, agent_id=agent_id,
                     status="current", family_id=hit_row["family_id"],
                     superseded_by=None, relation_type=relation)
-            record_edges(conn, key, hit_key)
+            record_edges(conn, key, hit_key, namespace=namespace)
             return with_advisory({"key": key, "action": "superseded"})
         else:
             age = max(0.0, (temporal.parse_ts(now) - temporal.parse_ts(hit_row["created_at"])).total_seconds() / 86400)
@@ -188,7 +191,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
                     **stamp, **refresh_expiry)
                  .where((OrmMemory.key == hit_key) & (OrmMemory.namespace == namespace))
                  .execute())
-                record_edges(conn, hit_key)
+                record_edges(conn, hit_key, namespace=namespace)
             return with_advisory({"key": hit_key, "action": "updated"})
 
     if is_trivia(value):
@@ -204,7 +207,7 @@ def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "c
             valid_until=effective_valid_until, agent_id=agent_id,
             status="current", family_id=uuid.uuid4().hex,
             superseded_by=None, relation_type=None)
-        record_edges(conn, key)
+        record_edges(conn, key, namespace=namespace)
     return with_advisory({"key": key, "action": "created"})
 
 
@@ -220,7 +223,8 @@ def save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",
         return receipt
     if receipt.get("action") in ("created", "updated", "superseded"):
         declarer = agent_id if agent_id else fallback_agent_id(token, user_agent)
-        note = record_declarations(conn, receipt["key"], links, aliases, declarer)
+        note = record_declarations(conn, receipt["key"], links, aliases, declarer,
+                                   namespace)
         if note:
             if receipt.get("suggestion"):
                 receipt["suggestion"] += "; " + note

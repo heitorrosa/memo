@@ -73,12 +73,15 @@ class Edge(BaseMemoryModel):
     src_key = TextField()
     dst_key = TextField()
     rel = TextField()
+    namespace = TextField(
+        default="default", constraints=[SQL("DEFAULT 'default'")]
+    )
     weight = FloatField(default=1.0, constraints=[SQL("DEFAULT 1.0")])
     created_at = TextField()
 
     class Meta:
         table_name = "edges"
-        primary_key = CompositeKey("src_key", "dst_key", "rel")
+        primary_key = CompositeKey("src_key", "dst_key", "rel", "namespace")
         constraints = [
             Check("rel IN ('mentions','supports','contradicts','derived_from')"),
         ]
@@ -87,6 +90,9 @@ class Edge(BaseMemoryModel):
 class Alias(BaseMemoryModel):
     segment = TextField()
     canonical = TextField()
+    namespace = TextField(
+        default="default", constraints=[SQL("DEFAULT 'default'")]
+    )
     declarers = TextField(default="", constraints=[SQL("DEFAULT ''")])
     status = TextField(
         default="candidate", constraints=[SQL("DEFAULT 'candidate'")]
@@ -97,7 +103,7 @@ class Alias(BaseMemoryModel):
 
     class Meta:
         table_name = "aliases"
-        primary_key = CompositeKey("segment", "canonical")
+        primary_key = CompositeKey("segment", "canonical", "namespace")
         constraints = [
             Check("status IN ('candidate','confirmed')"),
         ]
@@ -107,6 +113,9 @@ class EdgeDeclarer(BaseMemoryModel):
     src_key = TextField()
     dst_key = TextField()
     rel = TextField()
+    namespace = TextField(
+        default="default", constraints=[SQL("DEFAULT 'default'")]
+    )
     declarers = TextField(default="", constraints=[SQL("DEFAULT ''")])
     status = TextField(
         default="candidate", constraints=[SQL("DEFAULT 'candidate'")]
@@ -117,7 +126,7 @@ class EdgeDeclarer(BaseMemoryModel):
 
     class Meta:
         table_name = "edge_declarers"
-        primary_key = CompositeKey("src_key", "dst_key", "rel")
+        primary_key = CompositeKey("src_key", "dst_key", "rel", "namespace")
         constraints = [
             Check("status IN ('candidate','confirmed')"),
         ]

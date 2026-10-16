@@ -67,6 +67,40 @@ def ensure_aliases(conn: sqlite3.Connection) -> None:
             "INSERT INTO memo_meta(k,v) VALUES('memories_schema_4','applied')")
 
 
+def ensure_namespaces(conn: sqlite3.Connection) -> None:
+    if conn.execute(
+        "SELECT 1 FROM memo_meta WHERE k='memories_schema_5'"
+    ).fetchone():
+        return
+    peewee_db = orm_db(conn)
+    models = [orm_models.Edge, orm_models.Alias, orm_models.EdgeDeclarer]
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    for model in models:
+        table = model._meta.table_name
+        if table not in tables:
+            continue
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "namespace" in cols:
+            continue
+        old = f"{table}_schema4"
+        with conn:
+            conn.execute(f"ALTER TABLE {table} RENAME TO {old}")
+        with peewee_db.bind_ctx([model]):
+            peewee_db.create_tables([model], safe=True)
+        carried = [f.column_name for f in model._meta.sorted_fields
+                   if f.column_name != "namespace"]
+        names = ", ".join(carried)
+        with conn:
+            conn.execute(
+                f"INSERT INTO {table}({names},namespace)"
+                f" SELECT {names},'default' FROM {old}")
+            conn.execute(f"DROP TABLE {old}")
+    with conn:
+        conn.execute(
+            "INSERT INTO memo_meta(k,v) VALUES('memories_schema_5','applied')")
+
+
 MIGRATIONS: list = [("agents", 1, create_agents)]
 
 HAS_VEC = False
@@ -165,12 +199,14 @@ def migrate(conn: sqlite3.Connection) -> int:
         ensure_memory_columns(conn)
         ensure_edges(conn)
         ensure_aliases(conn)
+        ensure_namespaces(conn)
     else:
         with conn:
             conn.executescript(_render())
             ensure_memory_columns(conn)
             ensure_edges(conn)
             ensure_aliases(conn)
+            ensure_namespaces(conn)
             rebuild_fts(conn)
             return seed(conn)
     with conn:

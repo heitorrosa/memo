@@ -51,13 +51,14 @@ def test_migration_creates_alias_tables(tmp_path):
     assert conn.execute("SELECT v FROM memo_meta WHERE k='memories_schema_4'"
                         ).fetchone()[0] == "applied"
     assert {r[1] for r in conn.execute("PRAGMA table_info(aliases)")} == {
-        "segment", "canonical", "declarers", "status", "evidence",
+        "segment", "canonical", "namespace", "declarers", "status", "evidence",
         "first_seen", "last_seen"}
     info = conn.execute("PRAGMA table_info(edge_declarers)").fetchall()
     assert {r[1] for r in info} == {
-        "src_key", "dst_key", "rel", "declarers", "status", "evidence",
-        "first_seen", "last_seen"}
-    assert [r[1] for r in info if r[5]] == ["src_key", "dst_key", "rel"]
+        "src_key", "dst_key", "rel", "namespace", "declarers", "status",
+        "evidence", "first_seen", "last_seen"}
+    assert [r[1] for r in info if r[5]] == [
+        "src_key", "dst_key", "rel", "namespace"]
     conn.close()
 
 
