@@ -8,20 +8,11 @@ def mem(tmp_path):
     return conn
 
 
-def test_flag_off_bootstrap_never_raises(tmp_path):
+def test_bootstrap_always_on(tmp_path):
     conn = mem(tmp_path)
-    both_off = server_bootstrap_text(conn, memory_on=False, skills_on=False)
-    assert "memories DISABLED" in both_off and "skills DISABLED" in both_off
-    assert prompt_store.render("orientation") in both_off
-
-    mem_off = server_bootstrap_text(conn, memory_on=False, skills_on=True)
-    assert "memories DISABLED" in mem_off and "skills DISABLED" not in mem_off
-
-    skills_off = server_bootstrap_text(conn, memory_on=True, skills_on=False)
-    assert "skills DISABLED" in skills_off and "memories DISABLED" not in skills_off
-
-    memory_search = server_bootstrap_text(conn)
-    assert "DISABLED" not in memory_search
+    text = server_bootstrap_text(conn)
+    assert "DISABLED" not in text
+    assert prompt_store.render("orientation") in text
     conn.close()
 
 

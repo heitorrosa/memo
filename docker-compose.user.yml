@@ -8,9 +8,6 @@ services:
     volumes:
       - ./data:/data
       - ./models:/models:ro
-    environment:
-      FASTEMBED_CACHE_PATH: /models
-      HF_HUB_OFFLINE: "1"
     env_file:
       - .env
     healthcheck:

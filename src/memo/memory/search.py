@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import os
 import sqlite3
 
 from memo import db as memo_db
@@ -76,10 +75,6 @@ def candidate_rows(conn: sqlite3.Connection, namespace: str, fts_hits: dict) -> 
         f"SELECT {CANDIDATE_COLUMNS} FROM memories WHERE namespace=?"
         f" ORDER BY (rowid IN ({marks})) DESC, rowid LIMIT {CANDIDATE_LIMIT}",
         (namespace, *sorted(fts_hits))).fetchall()
-
-
-def expand_enabled() -> bool:
-    return os.getenv("MEMO_GRAPH_EXPAND", "").strip().lower() not in ("0", "false", "off")
 
 
 def expand_candidates(conn: sqlite3.Connection, scored: list[dict],
@@ -169,9 +164,8 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             "age_days": int(age), "uses": uses + 1,
             "stab": stability, "age": age, "updated": updated_at, "created": created_at, "status": status})
 
-    if expand_enabled():
-        scored = expand_candidates(conn, scored, namespace, query_time, known,
-                                   include_superseded)
+    scored = expand_candidates(conn, scored, namespace, query_time, known,
+                               include_superseded)
     if type is not None:
         scored = [result for result in scored if result["type"] == type]
     if min_score is not None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 
 from memo import errors
@@ -8,19 +7,9 @@ from memo import errors
 VERSION = 3
 
 
-def env_flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in ("1", "true", "yes")
-
-
-def resolve_domains() -> tuple[bool, bool]:
-    return not env_flag("MEMO_DISABLE_MEMORY"), not env_flag("MEMO_DISABLE_SKILLS")
-
-
-def startup_line(db_path: str, has_vec: bool, memory_on: bool,
-                 skills_on: bool) -> str:
+def startup_line(db_path: str, has_vec: bool) -> str:
     return (f"memo v3 db={db_path} vec={'vec' if has_vec else 'bruteforce'}"
-            f" memory={'on' if memory_on else 'off'}"
-            f" skills={'on' if skills_on else 'off'}")
+            f" memory=on skills=on")
 
 
 def log_operation(operation: str, namespace: str, elapsed_ms: float, row_count: int, action: str) -> None:

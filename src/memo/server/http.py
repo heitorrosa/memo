@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextvars
 import hmac
-import os
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
@@ -107,39 +106,19 @@ class BearerAuth:
 
 
 TRUST_ANY_HOST = "*"
-DEFAULT_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 DEFAULT_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
 
 
 class TrustedHostMiddleware(TransportSecurityMiddleware):
     def _validate_host(self, host: str | None) -> bool:
-        if TRUST_ANY_HOST in self.settings.allowed_hosts:
-            return bool(host)
-        return super()._validate_host(host)
+        return bool(host)
 
 
 def trusted_security() -> TransportSecuritySettings:
-    extra = [h.strip() for h in os.getenv("MEMO_TRUSTED_HOSTS", "").split(",")
-             if h.strip()]
-    if not extra:
-        return TransportSecuritySettings(
-            enable_dns_rebinding_protection=True,
-            allowed_hosts=[TRUST_ANY_HOST],
-            allowed_origins=list(DEFAULT_ORIGINS),
-        )
-    hosts = list(DEFAULT_HOSTS)
-    origins = list(DEFAULT_ORIGINS)
-    for entry in extra:
-        hosts.append(entry)
-        if not entry.endswith(":*"):
-            hosts.append(f"{entry}:*")
-        for scheme in ("http", "https"):
-            origins.append(f"{scheme}://{entry}")
-            origins.append(f"{scheme}://{entry}:*")
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=hosts,
-        allowed_origins=origins,
+        allowed_hosts=[TRUST_ANY_HOST],
+        allowed_origins=list(DEFAULT_ORIGINS),
     )
 
 

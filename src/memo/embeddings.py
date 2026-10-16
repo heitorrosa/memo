@@ -7,6 +7,7 @@ import sys
 import numpy as np
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_CACHE = "/models"
 DIM = 384
 
 model_singleton = None
@@ -16,7 +17,8 @@ force_fallback = False
 def load_model():
     from fastembed import TextEmbedding
 
-    return TextEmbedding(MODEL_NAME)
+    cache = MODEL_CACHE if os.path.isdir(MODEL_CACHE) else None
+    return TextEmbedding(MODEL_NAME, cache_dir=cache)
 
 
 def fallback_vectors(texts: list[str]) -> list[bytes]:
@@ -32,7 +34,7 @@ def fallback_vectors(texts: list[str]) -> list[bytes]:
 
 def embed(texts: list[str]) -> list[bytes]:
     global model_singleton
-    if force_fallback or os.getenv("MEMO_EMBEDDINGS_FALLBACK") == "1":
+    if force_fallback:
         return fallback_vectors(texts)
     if model_singleton is None:
         print("model-download-start", file=sys.stderr)

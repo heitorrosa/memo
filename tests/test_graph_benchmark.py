@@ -2,8 +2,8 @@
 
 This is a *measurement* benchmark, not a tuning harness. It seeds a deterministic
 multi-turn memory dataset (frozen clock, fallback embeddings, tmp DBs only) and
-reports retrieval quality with graph expansion OFF (MEMO_GRAPH_EXPAND=0) versus
-ON (MEMO_GRAPH_EXPAND=1). The fusion coefficients are logged, never retuned.
+reports retrieval quality with graph expansion OFF versus ON. The fusion
+coefficients are logged, never retuned.
 Token overhead is a character proxy: summed len(value) of the returned top-10,
 averaged per query (no tokenizer is run).
 
@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import datetime
 import math
-import os
 import shutil
 import time
 
@@ -52,6 +51,7 @@ import pytest
 
 from memo import db, embeddings, rank, temporal
 from memo.memory.common import is_trivia
+from memo.memory import search as search_module
 from memo.memory.save import save
 from memo.memory.search import search
 
@@ -246,20 +246,18 @@ def bench(tmp_path_factory):
         embeddings.force_fallback = saved_fallback
 
 
-def run_query(template, query, flag, work_path):
+def run_query(template, query, expanded, work_path):
     shutil.copyfile(str(template), str(work_path))
     conn = db.connect(str(work_path))
-    before = os.environ.get("MEMO_GRAPH_EXPAND")
-    os.environ["MEMO_GRAPH_EXPAND"] = flag
+    original = search_module.expand_candidates
+    if not expanded:
+        search_module.expand_candidates = lambda conn, scored, *args, **kwargs: scored
     try:
         started = time.perf_counter()
         hits = search(conn, query, limit=LIMIT)
         elapsed_ms = (time.perf_counter() - started) * 1000.0
     finally:
-        if before is None:
-            os.environ.pop("MEMO_GRAPH_EXPAND", None)
-        else:
-            os.environ["MEMO_GRAPH_EXPAND"] = before
+        search_module.expand_candidates = original
     return conn, hits, elapsed_ms
 
 
@@ -366,8 +364,8 @@ def classifier_report():
 
 
 def test_benchmark_table_and_floors(bench, tmp_path):
-    off = evaluate(bench, tmp_path, "0", "off")
-    on = evaluate(bench, tmp_path, "1", "on")
+    off = evaluate(bench, tmp_path, False, "off")
+    on = evaluate(bench, tmp_path, True, "on")
     classifier_text, accuracy, confusions = classifier_report()
     table = format_table(off, on, classifier_text)
     print("\n" + table + "\n")
@@ -401,13 +399,13 @@ def test_dataset_integrity(bench):
 
 
 def test_contradiction_pair_surfaces_flagged(bench, tmp_path):
-    conn, hits, _ = run_query(bench, "palette", "1", tmp_path / "palette.db")
+    conn, hits, _ = run_query(bench, "palette", True, tmp_path / "palette.db")
     flagged = {hit["key"]: hit.get("contradictions") for hit in hits}
     conn.close()
     for key in CONTRADICTION[0], CONTRADICTION[2]:
         assert key in flagged, flagged
         assert flagged[key], flagged
-    off_conn, off_hits, _ = run_query(bench, "palette", "0", tmp_path / "palette_off.db")
+    off_conn, off_hits, _ = run_query(bench, "palette", False, tmp_path / "palette_off.db")
     off_flagged = {hit["key"]: hit.get("contradictions") for hit in off_hits}
     off_conn.close()
     for key in CONTRADICTION[0], CONTRADICTION[2]:
@@ -415,7 +413,7 @@ def test_contradiction_pair_surfaces_flagged(bench, tmp_path):
 
 
 def test_expired_and_future_facts_are_never_returned(bench, tmp_path):
-    conn, hits, _ = run_query(bench, "quokka", "1", tmp_path / "temporal.db")
+    conn, hits, _ = run_query(bench, "quokka", True, tmp_path / "temporal.db")
     keys = {hit["key"] for hit in hits}
     statuses = {key: conn.execute(
         "SELECT status FROM memories WHERE key=? AND namespace='default'",
@@ -426,7 +424,7 @@ def test_expired_and_future_facts_are_never_returned(bench, tmp_path):
     assert SUPERSEDED[0] not in keys
     assert statuses[SUPERSEDED[0]] == "superseded"
     assert statuses[SUPERSEDED[2]] == "current"
-    conn, nimbus_hits, _ = run_query(bench, "nimbus", "1", tmp_path / "superseded.db")
+    conn, nimbus_hits, _ = run_query(bench, "nimbus", True, tmp_path / "superseded.db")
     nimbus_keys = {hit["key"] for hit in nimbus_hits}
     conn.close()
     assert SUPERSEDED[2] in nimbus_keys

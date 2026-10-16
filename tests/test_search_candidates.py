@@ -1,5 +1,4 @@
 import datetime
-import os
 
 import numpy as np
 import pytest
@@ -24,27 +23,10 @@ def fallback():
         embeddings.force_fallback = False
 
 
-@pytest.fixture(autouse=True)
-def expand_on(monkeypatch):
-    monkeypatch.setenv("MEMO_GRAPH_EXPAND", "1")
-
-
 def mem(tmp_path, name="memo.db"):
     conn = db.connect(str(tmp_path / name))
     assert db.migrate(conn) == 3
     return conn
-
-
-def search_flag(conn, query, flag, **kwargs):
-    previous = os.environ.get("MEMO_GRAPH_EXPAND")
-    os.environ["MEMO_GRAPH_EXPAND"] = flag
-    try:
-        return search(conn, query, **kwargs)
-    finally:
-        if previous is None:
-            os.environ.pop("MEMO_GRAPH_EXPAND", None)
-        else:
-            os.environ["MEMO_GRAPH_EXPAND"] = previous
 
 
 def orthogonal_to(vector):
@@ -167,14 +149,11 @@ def test_expansion_honors_historical_valid_at_window(tmp_path):
     save(conn, "lab.old", "oldunit value", type="preference",
          valid_from="2026-01-01", valid_until="2026-02-01",
          links=[{"to": "lab.anchor", "rel": "derived_from"}])
-    on = {hit["key"]: hit["score"] for hit in search_flag(
-        conn, "quokka anchor", "1", valid_at="2026-01-15")}
-    off = {hit["key"]: hit["score"] for hit in search_flag(
-        conn, "quokka anchor", "0", valid_at="2026-01-15")}
-    present = [hit["key"] for hit in search_flag(
-        conn, "quokka anchor", "1")]
+    on = {hit["key"]: hit["score"] for hit in search(
+        conn, "quokka anchor", valid_at="2026-01-15")}
+    present = [hit["key"] for hit in search(conn, "quokka anchor")]
     conn.close()
-    assert on["lab.old"] > off["lab.old"]
+    assert on["lab.old"] > 0
     assert "lab.old" not in present
 
 

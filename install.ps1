@@ -27,7 +27,7 @@ if (Get-ChildItem -Path $modelsDir -Recurse -File -ErrorAction SilentlyContinue)
     Write-Host "models/ already populated, skipping weights fetch"
 } else {
     Write-Host "Fetching embedding weights into models/ with a temporary container (no local Python needed)"
-    docker run --rm -v "${modelsDir}:/models" -v "$(Join-Path $root 'scripts'):/scripts:ro" -e FASTEMBED_CACHE_PATH=/models $image python /scripts/fetch_model.py
+    docker run --rm -v "${modelsDir}:/models" -v "$(Join-Path $root 'scripts'):/scripts:ro" $image python /scripts/fetch_model.py
 }
 
 docker compose -f (Join-Path $root "docker-compose.user.yml") up -d

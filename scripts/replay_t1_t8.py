@@ -5,7 +5,6 @@ import tempfile
 import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-os.environ["MEMO_EMBEDDINGS_FALLBACK"] = "1"
 
 from memo import db, embeddings, summary
 from memo.memory.save import save

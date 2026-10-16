@@ -12,7 +12,7 @@ import uvicorn
 from memo import db
 from memo.server.core import build_server, dump_tool_names
 from memo.server.http import build_http_app
-from memo.server.shared import resolve_domains, startup_line
+from memo.server.shared import startup_line
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,10 +80,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.backup:
         return backup_database(args.db, args.backup)
-    memory_on, skills_on = resolve_domains()
-    if not memory_on and not skills_on:
-        print("memo: no domains enabled", file=sys.stderr)
-        return 2
     if args.dump_tools:
         print("\n".join(dump_tool_names(build_server(args.db))))
         return 0
@@ -95,8 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.http:
         return main_http(["--db", args.db, "--port", str(args.port),
                           "--host", args.host])
-    server = build_server(args.db, memory_on, skills_on)
-    print(startup_line(args.db, db.HAS_VEC, memory_on, skills_on), file=sys.stderr)
+    server = build_server(args.db)
+    print(startup_line(args.db, db.HAS_VEC), file=sys.stderr)
     asyncio.run(server.run_stdio_async())
     return 0
 
@@ -110,16 +106,12 @@ def main_http(argv: list[str] | None = None) -> int:
     if not args.db:
         print("memo: --db <path> is required", file=sys.stderr)
         return 2
-    memory_on, skills_on = resolve_domains()
-    if not memory_on and not skills_on:
-        print("memo: no domains enabled", file=sys.stderr)
-        return 2
     if refuse_if_locked(args.db):
         print(f"memo: {args.db} is held by another process — refusing"
               f" a second writer on the live DB", file=sys.stderr)
         return 2
-    server = build_server(args.db, memory_on, skills_on)
-    print(startup_line(args.db, db.HAS_VEC, memory_on, skills_on), file=sys.stderr)
+    server = build_server(args.db)
+    print(startup_line(args.db, db.HAS_VEC), file=sys.stderr)
     uvicorn.run(build_http_app(server, token), host=args.host, port=args.port,
                 log_level="warning", access_log=False)
     return 0

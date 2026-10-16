@@ -1,6 +1,5 @@
 import datetime
 import json
-import os
 
 import pytest
 
@@ -97,58 +96,38 @@ def seed(conn, fresh_key=None):
     return fillers
 
 
-def run_query(tmp_path, name, query, flag, fresh_key=None, limit=10):
+def run_query(tmp_path, name, query, expanded=True, fresh_key=None, limit=10):
     conn = db.connect(str(tmp_path / f"{name}.db"))
     assert db.migrate(conn) == 3
     seed(conn, fresh_key=fresh_key)
-    previous = os.environ.get("MEMO_GRAPH_EXPAND")
-    if flag is None:
-        os.environ.pop("MEMO_GRAPH_EXPAND", None)
-    else:
-        os.environ["MEMO_GRAPH_EXPAND"] = flag
+    original = search_module.expand_candidates
+    if not expanded:
+        search_module.expand_candidates = lambda conn, scored, *args, **kwargs: scored
     try:
         hits = search(conn, query, limit=limit)
     finally:
-        if previous is None:
-            os.environ.pop("MEMO_GRAPH_EXPAND", None)
-        else:
-            os.environ["MEMO_GRAPH_EXPAND"] = previous
+        search_module.expand_candidates = original
         conn.close()
     return hits
 
 
-def test_flag_off_never_invokes_expansion(tmp_path, monkeypatch):
+def test_expansion_invoked_by_default(tmp_path, monkeypatch):
     calls = []
     original = search_module.expand_candidates
     monkeypatch.setattr(
         search_module, "expand_candidates",
         lambda *args, **kwargs: calls.append(1) or original(*args, **kwargs))
-    run_query(tmp_path, "off_spy", ANCHOR_TOKENS[0], "0",
-              fresh_key=anchor_key(TOPICS[0]))
-    assert calls == []
-
-
-def test_flag_on_invokes_expansion(tmp_path, monkeypatch):
-    calls = []
-    original = search_module.expand_candidates
-    monkeypatch.setattr(
-        search_module, "expand_candidates",
-        lambda *args, **kwargs: calls.append(1) or original(*args, **kwargs))
-    run_query(tmp_path, "on_spy", ANCHOR_TOKENS[0], "1",
+    run_query(tmp_path, "on_spy", ANCHOR_TOKENS[0],
               fresh_key=anchor_key(TOPICS[0]))
     assert calls == [1]
 
 
-def test_flag_off_is_byte_identical_and_deterministic(tmp_path, monkeypatch):
-    first = run_query(tmp_path, "off_a", ANCHOR_TOKENS[0], "0",
+def test_expansion_is_deterministic(tmp_path):
+    first = run_query(tmp_path, "on_a", ANCHOR_TOKENS[0],
                       fresh_key=anchor_key(TOPICS[0]))
-    second = run_query(tmp_path, "off_b", ANCHOR_TOKENS[0], "0",
+    second = run_query(tmp_path, "on_b", ANCHOR_TOKENS[0],
                        fresh_key=anchor_key(TOPICS[0]))
     assert json.dumps(first) == json.dumps(second)
-    monkeypatch.setattr(search_module, "expand_enabled", lambda: False)
-    disabled = run_query(tmp_path, "off_disabled", ANCHOR_TOKENS[0], "1",
-                         fresh_key=anchor_key(TOPICS[0]))
-    assert json.dumps(first) == json.dumps(disabled)
 
 
 def test_expansion_co_retrieval_rate(tmp_path):
@@ -157,9 +136,9 @@ def test_expansion_co_retrieval_rate(tmp_path):
     for topic, token in zip(TOPICS, ANCHOR_TOKENS):
         related = {anchor_key(topic), *child_keys(topic)}
         off_keys = {hit["key"] for hit in run_query(
-            tmp_path, f"off_{topic}", token, "0", fresh_key=anchor_key(topic))}
+            tmp_path, f"off_{topic}", token, False, fresh_key=anchor_key(topic))}
         on_keys = {hit["key"] for hit in run_query(
-            tmp_path, f"on_{topic}", token, "1", fresh_key=anchor_key(topic))}
+            tmp_path, f"on_{topic}", token, True, fresh_key=anchor_key(topic))}
         off_ok = len(related & off_keys) >= 2
         on_ok = len(related & on_keys) >= 2
         off_hits += off_ok
@@ -173,8 +152,8 @@ def test_expansion_co_retrieval_rate(tmp_path):
 
 
 def test_contradicts_pair_present_but_never_scored(tmp_path):
-    off = run_query(tmp_path, "off_lab", LAB_QUERY, "0")
-    on = run_query(tmp_path, "on_lab", LAB_QUERY, "1")
+    off = run_query(tmp_path, "off_lab", LAB_QUERY, False)
+    on = run_query(tmp_path, "on_lab", LAB_QUERY, True)
     off_scores = {hit["key"]: hit["score"] for hit in off}
     on_scores = {hit["key"]: hit["score"] for hit in on}
     for key in (CONTRADICT_A, CONTRADICT_B):
@@ -183,8 +162,8 @@ def test_contradicts_pair_present_but_never_scored(tmp_path):
 
 
 def test_isolated_fact_is_unaffected(tmp_path):
-    off = run_query(tmp_path, "off_iso", ISOLATED_QUERY, "0")
-    on = run_query(tmp_path, "on_iso", ISOLATED_QUERY, "1")
+    off = run_query(tmp_path, "off_iso", ISOLATED_QUERY, False)
+    on = run_query(tmp_path, "on_iso", ISOLATED_QUERY, True)
     off_scores = {hit["key"]: hit["score"] for hit in off}
     on_scores = {hit["key"]: hit["score"] for hit in on}
     assert ISOLATED in off_scores and ISOLATED in on_scores
@@ -201,50 +180,21 @@ def test_expansion_caps_merged_neighbors_at_twenty(tmp_path):
     for key, word in zip(children, CAP_WORDS):
         confirmed_link(conn, key, hub, f"also {word}")
     backdate(conn, children, 60)
-    os.environ["MEMO_GRAPH_EXPAND"] = "1"
-    try:
-        hits = search(conn, "hubtoken", limit=40)
-    finally:
-        os.environ.pop("MEMO_GRAPH_EXPAND", None)
-        conn.close()
+    hits = search(conn, "hubtoken", limit=40)
+    conn.close()
     child_set = set(children)
     boosted = [hit for hit in hits
                if hit["key"] in child_set and hit["score"] > 0.35]
     assert len(boosted) == 20
 
 
-def test_expand_enabled_semantics(monkeypatch):
-    for value in (None, "", "1", "true", "yes", "on", "random"):
-        if value is None:
-            monkeypatch.delenv("MEMO_GRAPH_EXPAND", raising=False)
-        else:
-            monkeypatch.setenv("MEMO_GRAPH_EXPAND", value)
-        assert search_module.expand_enabled() is True
-    for value in ("0", "false", "off", "FALSE", "Off", " 0 "):
-        monkeypatch.setenv("MEMO_GRAPH_EXPAND", value)
-        assert search_module.expand_enabled() is False
-
-
-def test_default_env_enables_expansion(tmp_path, monkeypatch):
-    calls = []
-    original = search_module.expand_candidates
-    monkeypatch.setattr(
-        search_module, "expand_candidates",
-        lambda *args, **kwargs: calls.append(1) or original(*args, **kwargs))
-    hits = run_query(tmp_path, "default_on", ANCHOR_TOKENS[0], None,
-                     fresh_key=anchor_key(TOPICS[0]))
-    assert calls == [1]
-    related = {anchor_key(TOPICS[0]), *child_keys(TOPICS[0])}
-    assert len(related & {hit["key"] for hit in hits}) >= 2
-
-
-def test_default_env_improves_co_retrieval(tmp_path):
+def test_expansion_improves_co_retrieval(tmp_path):
     related = {anchor_key(TOPICS[0]), *child_keys(TOPICS[0])}
     off_keys = {hit["key"] for hit in run_query(
-        tmp_path, "off_default_cmp", ANCHOR_TOKENS[0], "0",
+        tmp_path, "off_default_cmp", ANCHOR_TOKENS[0], False,
         fresh_key=anchor_key(TOPICS[0]))}
     default_keys = {hit["key"] for hit in run_query(
-        tmp_path, "on_default_cmp", ANCHOR_TOKENS[0], None,
+        tmp_path, "on_default_cmp", ANCHOR_TOKENS[0], True,
         fresh_key=anchor_key(TOPICS[0]))}
     assert len(related & off_keys) < len(related & default_keys)
     assert len(related & default_keys) >= 2
@@ -267,9 +217,11 @@ def window_conn(tmp_path, name):
     return conn
 
 
-def window_hits(conn, query, valid_at=None, as_known_at=None, flag="1", limit=10):
-    previous = os.environ.get("MEMO_GRAPH_EXPAND")
-    os.environ["MEMO_GRAPH_EXPAND"] = flag
+def window_hits(conn, query, valid_at=None, as_known_at=None, expanded=True,
+                limit=10):
+    original = search_module.expand_candidates
+    if not expanded:
+        search_module.expand_candidates = lambda conn, scored, *args, **kwargs: scored
     try:
         kwargs = {}
         if valid_at is not None:
@@ -278,10 +230,7 @@ def window_hits(conn, query, valid_at=None, as_known_at=None, flag="1", limit=10
             kwargs["as_known_at"] = as_known_at
         return search(conn, query, limit=limit, **kwargs)
     finally:
-        if previous is None:
-            os.environ.pop("MEMO_GRAPH_EXPAND", None)
-        else:
-            os.environ["MEMO_GRAPH_EXPAND"] = previous
+        search_module.expand_candidates = original
 
 
 def window_link(conn, key, value, parent, valid_from=None, valid_until=None):
@@ -300,9 +249,10 @@ def test_expansion_honors_valid_at_window(tmp_path):
     window_link(conn, "lab.child", f"also {WINDOW_CHILD}", "lab.anchor")
     backdate(conn, ["lab.child"], 60)
     past_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=PAST_WINDOW))
-    past_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=PAST_WINDOW, flag="0"))
+    past_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=PAST_WINDOW,
+                                  expanded=False))
     now_on = scores(window_hits(conn, WINDOW_ANCHOR))
-    now_off = scores(window_hits(conn, WINDOW_ANCHOR, flag="0"))
+    now_off = scores(window_hits(conn, WINDOW_ANCHOR, expanded=False))
     conn.close()
     assert "lab.anchor" in past_on
     assert "lab.child" not in past_on
@@ -317,7 +267,8 @@ def test_expansion_honors_past_only_neighbor(tmp_path):
                 valid_from=OPEN_SINCE, valid_until="2026-02-01")
     backdate(conn, ["lab.old"], 60)
     historical_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=MID_WINDOW))
-    historical_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=MID_WINDOW, flag="0"))
+    historical_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=MID_WINDOW,
+                                        expanded=False))
     present = scores(window_hits(conn, WINDOW_ANCHOR))
     conn.close()
     assert historical_on["lab.old"] > historical_off["lab.old"]
@@ -333,7 +284,8 @@ def test_expansion_honors_as_known_at(tmp_path):
     known = scores(window_hits(conn, WINDOW_ANCHOR, as_known_at=KNOWN_AT))
     windowed = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=KNOWN_AT))
     later_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW))
-    later_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW, flag="0"))
+    later_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW,
+                                   expanded=False))
     conn.close()
     assert "lab.anchor" in known
     assert "lab.future" not in known
@@ -351,7 +303,7 @@ def test_expansion_time_precedence(tmp_path):
     explicit_on = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW,
                                      as_known_at=KNOWN_AT))
     explicit_off = scores(window_hits(conn, WINDOW_ANCHOR, valid_at=LATER_WINDOW,
-                                      as_known_at=KNOWN_AT, flag="0"))
+                                      as_known_at=KNOWN_AT, expanded=False))
     conn.close()
     assert "lab.future" not in implicit
     assert explicit_on["lab.future"] > explicit_off["lab.future"]

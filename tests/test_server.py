@@ -42,20 +42,16 @@ def test_envelopes(tmp_path):
     conn.close()
 
 
-def test_disable_flags(tmp_path, monkeypatch):
+def test_domains_always_on(tmp_path, monkeypatch):
     from memo.server.core import build_server
-    conn = mem(tmp_path)
-    monkeypatch.setenv("MEMO_DISABLE_MEMORY", "1")
-    s = build_server(str(tmp_path / "memo.db"))
     import asyncio
-    names = sorted(t.name for t in asyncio.run(s.list_tools()))
-    assert names == ["skill_get", "skill_install", "skill_put",
-                     "skill_sync", "skill_update"]
+    monkeypatch.setenv("MEMO_DISABLE_MEMORY", "1")
     monkeypatch.setenv("MEMO_DISABLE_SKILLS", "yes")
-    with pytest.raises(SystemExit) as e:
-        build_server(str(tmp_path / "memo.db"))
-    assert e.value.code == 2
-    conn.close()
+    s = build_server(str(tmp_path / "memo.db"))
+    names = sorted(t.name for t in asyncio.run(s.list_tools()))
+    assert names == ["memory_delete", "memory_save", "memory_search",
+                     "skill_get", "skill_install", "skill_put",
+                     "skill_sync", "skill_update"]
 
 
 def test_dump_tools(tmp_path, capsys):
@@ -69,10 +65,10 @@ def test_dump_tools(tmp_path, capsys):
 
 def test_startup_line():
     from memo.server.shared import startup_line
-    assert startup_line("x.db", True, True, True) == \
+    assert startup_line("x.db", True) == \
         "memo v3 db=x.db vec=vec memory=on skills=on"
-    assert startup_line("x.db", False, False, True) == \
-        "memo v3 db=x.db vec=bruteforce memory=off skills=on"
+    assert startup_line("x.db", False) == \
+        "memo v3 db=x.db vec=bruteforce memory=on skills=on"
 
 
 def test_vec_fallback(tmp_path):
@@ -127,7 +123,7 @@ def test_health(tmp_path):
         th.join(timeout=10)
 
 
-def test_http_tightened_host_rejected(tmp_path, monkeypatch):
+def test_http_trusted_hosts_env_ignored(tmp_path, monkeypatch):
     import httpx
     monkeypatch.setenv("MEMO_TRUSTED_HOSTS", "memo.tunnel.example")
     srv, th = serve(str(tmp_path / "m.db"), 18095)
@@ -136,16 +132,14 @@ def test_http_tightened_host_rejected(tmp_path, monkeypatch):
                        headers={**JSON_ONLY, "Authorization": "Bearer t",
                                 "Host": "evil.example"},
                        timeout=5.0)
-        assert r.status_code == 421
-        assert "Invalid Host header" in r.text
+        assert r.status_code == 200, r.text
     finally:
         srv.should_exit = True
         th.join(timeout=10)
 
 
-def test_http_trusted_host_from_env_passes(tmp_path, monkeypatch):
+def test_http_tunnel_host_passes(tmp_path):
     import httpx
-    monkeypatch.setenv("MEMO_TRUSTED_HOSTS", "memo.tunnel.example")
     srv, th = serve(str(tmp_path / "m.db"), 18096)
     try:
         r = httpx.post("http://127.0.0.1:18096/mcp", json=init_body(),
@@ -159,9 +153,8 @@ def test_http_trusted_host_from_env_passes(tmp_path, monkeypatch):
         th.join(timeout=10)
 
 
-def test_http_default_hosts_permissive(tmp_path, monkeypatch):
+def test_http_default_hosts_permissive(tmp_path):
     import httpx
-    monkeypatch.delenv("MEMO_TRUSTED_HOSTS", raising=False)
     srv, th = serve(str(tmp_path / "m.db"), 18097)
     try:
         ok = httpx.post("http://127.0.0.1:18097/mcp", json=init_body(),
@@ -179,9 +172,8 @@ def test_http_default_hosts_permissive(tmp_path, monkeypatch):
         th.join(timeout=10)
 
 
-def test_http_default_origin_still_gated(tmp_path, monkeypatch):
+def test_http_default_origin_still_gated(tmp_path):
     import httpx
-    monkeypatch.delenv("MEMO_TRUSTED_HOSTS", raising=False)
     srv, th = serve(str(tmp_path / "m.db"), 18098)
     try:
         r = httpx.post("http://127.0.0.1:18098/mcp", json=init_body(),
