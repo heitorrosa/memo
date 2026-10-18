@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+/* Tokens are frozen by the swarm contract (_contract.md §5). Dark only; they
+   are CSS vars so a light theme stays possible later. */
+@theme {
+  --color-bg: #0b0a09;
+  --color-surface: #12100e;
+  --color-surface-2: #171411;
+  --color-line: #2b2622;
+  --color-line-soft: #201c19;
+  --color-ink: #ece6da;
+  --color-muted: #a29a8b;
+  --color-faint: #6d665c;
+  --color-amber: #e0a52c;
+  --color-amber-dim: #7a5a17;
+  --color-coral: #e2603f;
+  --color-green: #7fa650;
+  --color-blue: #6f9ec4;
+  --color-violet: #a585c9;
+
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@layer base {
+  :root {
+    --hair: color-mix(in srgb, var(--color-ink) 3%, transparent);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: 14.5px;
+    line-height: 1.72;
+    font-variant-ligatures: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
+  }
+
+  /* Fixed hairline technical grid, 124px cells at 3% of --ink. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image:
+      repeating-linear-gradient(90deg, var(--hair) 0 1px, transparent 1px 124px),
+      repeating-linear-gradient(0deg, var(--hair) 0 1px, transparent 1px 124px);
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    text-align: left;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 1px solid var(--color-amber-dim);
+    outline-offset: -1px;
+  }
+
+  ::selection {
+    background: var(--color-amber);
+    color: var(--color-bg);
+  }
+
+  ::placeholder {
+    color: var(--color-faint);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  /* 10.5px uppercase micro-label, the only place tracking is used. */
+  .microlabel {
+    font-size: 10.5px;
+    line-height: 1.4;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--color-faint);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* One per viewport: a single faint scan over the ascii stage. */
+  .scan {
+    background-image: repeating-linear-gradient(
+      0deg,
+      rgb(0 0 0 / 0.22) 0 1px,
+      transparent 1px 3px
+    );
+  }
+
+  .stage-pre {
+    font-size: 10.5px;
+    line-height: 1.06;
+    letter-spacing: 0.02em;
+    white-space: pre;
+  }
+}

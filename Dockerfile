@@ -2,6 +2,18 @@
 # NOT baked into the image; they ride a read-only bind mount of ./models (populated
 # by scripts/fetch_model.py, wired in docker-compose.yml), so a rebuild never
 # re-downloads them from HuggingFace.
+# The dashboard is built in a throwaway node stage; only its output rides into
+# the runtime image and MEMO_UI_DIR points the /ui mount at it. vite's outDir is
+# "../src/memo/static/ui" (relative to the ui/ project root), i.e. /src/memo/...
+
+FROM node:22-slim AS ui
+WORKDIR /ui
+COPY ui/package*.json ./
+RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
+    else npm install --no-audit --no-fund; fi
+COPY ui/ ./
+RUN mkdir -p /src/memo/static/ui && npm run build
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
@@ -10,6 +22,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src/ src/
 RUN pip install --no-cache-dir . fastembed uvicorn
+
+COPY --from=ui /src/memo/static/ui /app/static-ui
+ENV MEMO_UI_DIR=/app/static-ui
 
 VOLUME /data
 EXPOSE 8000

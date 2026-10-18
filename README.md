@@ -68,6 +68,20 @@ flowchart LR
 
 For web harnesses (ChatGPT, Claude.ai), paste [`INSTRUCTIONS.md`](INSTRUCTIONS.md) into the system prompt or instructions field; it is the client-side routine to search first, save durable facts while working, and save outcomes at the end. Remote MCP clients point at `http://localhost:5000/mcp`, and clients that cannot set headers authenticate with `?access_token=<token>`. OpenCode setup and skill sync live in [`opencode-memo/README.md`](opencode-memo/README.md).
 
+## Dashboard UI
+
+`ui/` is the dashboard: a keyboard-driven terminal-style app (Vite + React 19 + TypeScript + Tailwind v4 + `motion`) with four panes — MEMORIES, SKILLS, AGENTS, APP — over an animated ASCII graph of the memory stage. Mono type, hairlines, no icon fonts, no CDN. It speaks the JSON API under `/api` and is served by the same process at `/ui`.
+
+```bash
+cd ui && npm install && npm run build   # writes src/memo/static/ui (gitignored)
+```
+
+`make ui` is the same two steps (it currently no-ops, because the target name collides with the `ui/` directory and has no `.PHONY`). Vite builds with `base: /ui/`, so the output drops straight into the server's static mount.
+
+The app needs the bearer token: open `/ui/?token=<MEMO_TOKEN>` once — the token is stored in `localStorage` and stripped from the URL — or paste it into the gate screen.
+
+Scope: it reads memories, skills, agents, stats and the graph, and writes only what the panes offer — save a memory (`n`), soft-delete one (`d`), patch a skill body (`e`). Keys: `1`-`4` panes, `/` search, `j k g G` move, `enter` open, `esc` back, `r` refresh, `?` keymap.
+
 ## License
 
 GPL-3.0-only. See [`LICENSE`](LICENSE).
