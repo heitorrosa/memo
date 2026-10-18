@@ -84,10 +84,23 @@ export function AgentsPanel({
 
   const detail = items.find((agent) => agent.agent_id === selected) ?? null;
   const current = skills.state.status === "ready" ? skills.state.data.items : [];
+  // Nothing selected: the detail column is dropped so the list gets the whole
+  // pane instead of paying ~300px for a blank sheet.
+  const open = selected !== null;
 
   return (
-    <div className={active ? "grid h-full grid-cols-[minmax(0,1.3fr)_minmax(20rem,1fr)]" : "hidden"}>
-      <div className="flex min-h-0 flex-col border-r border-line">
+    <div
+      className={
+        active
+          ? `grid h-full ${
+              open
+                ? "grid-cols-[minmax(0,1.3fr)_minmax(20rem,1fr)]"
+                : "grid-cols-[minmax(0,1fr)]"
+            }`
+          : "hidden"
+      }
+    >
+      <div className={`flex min-h-0 flex-col ${open ? "border-r border-line" : ""}`}>
         <Panel
           title="AGENTS"
           meta={list.state.status === "ready" ? `${items.length} registered` : undefined}
@@ -112,13 +125,15 @@ export function AgentsPanel({
           ) : null}
         </Panel>
         <p className="microlabel shrink-0 border-t border-line-soft px-3 py-1">
-          j k move · enter open
+          {selected ? "j k move · enter open" : "no agent selected · j k move · enter open"}
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <AgentDetail agent={detail} state={list.state} current={current} />
-      </div>
+      {open ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <AgentDetail agent={detail} state={list.state} current={current} />
+        </div>
+      ) : null}
     </div>
   );
 }

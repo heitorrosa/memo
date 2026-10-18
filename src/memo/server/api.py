@@ -8,6 +8,9 @@ server lock, so the single-writer rule holds.
 from __future__ import annotations
 
 import json
+import sys
+import threading
+import time
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -15,6 +18,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from memo import db as memo_db
+from memo import embeddings
 from memo.memory.common import STABILITY
 from memo.models.orm import (
     Agent,
@@ -44,6 +48,21 @@ MEMORY_COLUMNS = (
 SORTS = ("updated_at", "uses", "score")
 STATUSES = ("current", "superseded")
 STATUS_BY_CODE = {"not_found": 404, "cap_evicted": 409, "internal": 500}
+
+# Similarity graph: k nearest neighbours by cosine over the stored embeddings.
+SIMILAR_TOP_K = 3
+SIMILAR_FLOOR = 0.35
+SIMILAR_RETRY_FLOOR = 0.25
+SIMILAR_MAX = 400
+SIMILAR_TTL = 30.0
+SIMILAR_BUDGET = 1.5
+RELATED_TOP_K = 5
+RELATED_FLOOR = 0.25
+
+# namespace -> (data stamp, expiry, pairs); stamp changes when a memory is
+# written, so the table is rebuilt instead of served stale.
+_sim_cache: dict[str, tuple] = {}
+_sim_lock = threading.Lock()
 
 
 class BadInput(Exception):
@@ -223,9 +242,10 @@ def _memory_detail(conn, key: str, namespace: str):
         "declarers": _names(d.declarers), "status": d.status,
         "evidence": d.evidence} for d in declarer_rows]
     degrees = _degrees(conn, [key], namespace)
+    related = _related(conn, key, row.embedding, namespace)
     return {"memory": _memory_json(_memory_dict(row), degrees.get(key, 0)),
             "edges": edges, "aliases": aliases, "family": family,
-            "declarers": declarers}
+            "declarers": declarers, "related": related}
 
 
 def _stats(conn, db_path: str, ui_built: bool) -> dict:
@@ -339,6 +359,85 @@ def _agents(conn) -> dict:
     return {"items": items}
 
 
+def _vectors(conn, namespace: str) -> list[tuple[str, bytes]]:
+    rows = _raw(conn, "SELECT key, embedding FROM memories WHERE namespace = ?",
+                (namespace,))
+    return [(row["key"], bytes(row["embedding"])) for row in rows
+            if row["embedding"]]
+
+
+def _select_pairs(vectors, floor: float) -> dict[tuple[str, str], float]:
+    candidates: dict[str, list] = {key: [] for key, _ in vectors}
+    for index in range(len(vectors)):
+        src_key, src_vec = vectors[index]
+        for other in range(index + 1, len(vectors)):
+            dst_key, dst_vec = vectors[other]
+            score = embeddings.cosine(src_vec, dst_vec)
+            if score >= floor:
+                candidates[src_key].append((score, dst_key))
+                candidates[dst_key].append((score, src_key))
+    best: dict[tuple[str, str], float] = {}
+    for src_key, scored in candidates.items():
+        scored.sort(reverse=True)
+        for score, dst_key in scored[:SIMILAR_TOP_K]:
+            pair = (src_key, dst_key) if src_key <= dst_key else (dst_key, src_key)
+            if score > best.get(pair, 0.0):
+                best[pair] = score
+    return best
+
+
+def _compute_similar(conn, namespace: str) -> list[dict]:
+    vectors = _vectors(conn, namespace)
+    best = _select_pairs(vectors, SIMILAR_FLOOR)
+    if not best:
+        best = _select_pairs(vectors, SIMILAR_RETRY_FLOOR)
+    pairs = [{"src_key": src, "dst_key": dst, "score": round(score, 3)}
+             for (src, dst), score in best.items()]
+    pairs.sort(key=lambda pair: (-pair["score"], pair["src_key"],
+                                 pair["dst_key"]))
+    return pairs[:SIMILAR_MAX]
+
+
+def _similar(conn, namespace: str) -> list[dict]:
+    stamp = conn.execute(
+        "SELECT COUNT(*), MAX(updated_at) FROM memories WHERE namespace = ?",
+        (namespace,)).fetchone()
+    stamp = (stamp[0], stamp[1])
+    now = time.monotonic()
+    with _sim_lock:
+        cached = _sim_cache.get(namespace)
+        if cached is not None and cached[0] == stamp and cached[1] > now:
+            return cached[2]
+    started = time.monotonic()
+    pairs = _compute_similar(conn, namespace)
+    if time.monotonic() - started > SIMILAR_BUDGET:
+        print("devWarn: similarity table build over 1.5s; returning none",
+              file=sys.stderr)
+        pairs = []
+    with _sim_lock:
+        _sim_cache[namespace] = (stamp, now + SIMILAR_TTL, pairs)
+    return pairs
+
+
+def _related(conn, key: str, embedding, namespace: str) -> list[dict]:
+    if not embedding:
+        return []
+    embedding = bytes(embedding)
+    scored = []
+    for row in _raw(conn, "SELECT key, type, status, uses, embedding"
+                          " FROM memories WHERE namespace = ?", (namespace,)):
+        if row["key"] == key or not row["embedding"]:
+            continue
+        score = embeddings.cosine(embedding, bytes(row["embedding"]))
+        if score < RELATED_FLOOR:
+            continue
+        scored.append({"key": row["key"], "type": row["type"],
+                       "status": row["status"], "uses": row["uses"],
+                       "score": round(score, 3)})
+    scored.sort(key=lambda item: (-item["score"], item["key"]))
+    return scored[:RELATED_TOP_K]
+
+
 def _graph(conn, namespace: str, limit: int) -> dict:
     node_rows = _raw(conn, "SELECT key, type, status, uses, score FROM memories"
                            " WHERE namespace = ?", (namespace,))
@@ -359,7 +458,11 @@ def _graph(conn, namespace: str, limit: int) -> dict:
               "rel": edge["rel"], "weight": edge["weight"]}
              for edge in edge_rows
              if edge["src_key"] in keys and edge["dst_key"] in keys]
-    return {"nodes": nodes, "edges": edges}
+    # The cached table covers the whole namespace; keep only pairs whose both
+    # ends are in this (limit-truncated) node set.
+    similar = [pair for pair in _similar(conn, namespace)
+               if pair["src_key"] in keys and pair["dst_key"] in keys]
+    return {"nodes": nodes, "edges": edges, "similar": similar}
 
 
 def api_app(server):

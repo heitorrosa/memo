@@ -59,12 +59,6 @@ export function relTime(iso: string | null | undefined): string {
   return iso.slice(0, 10);
 }
 
-export function clock(now: Date): string {
-  return [now.getHours(), now.getMinutes(), now.getSeconds()]
-    .map((part) => String(part).padStart(2, "0"))
-    .join(":");
-}
-
 /* --------------------------------------------------------------- scalars -- */
 
 export function bytes(size: number | null | undefined): string {

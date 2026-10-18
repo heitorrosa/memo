@@ -1,6 +1,7 @@
 // Pure, dependency-free rasteriser for the memory-graph ASCII stage.
-// No React, no imports. Every position derives from hash(key) so the same
-// props always give the same layout; only the caller's `angle` moves.
+// No React, no imports. Node positions come from `layout()` (similarity
+// relaxation over hash seeds), so the same payload always gives the same
+// picture; only the caller's `angle` moves.
 
 export type AsciiNode = {
   key: string;
@@ -17,6 +18,15 @@ export type AsciiEdge = {
   rel: string;
   weight: number;
 };
+
+/** A cosine neighbour pair: `score` is similarity in [0,1]. */
+export type AsciiLink = {
+  src_key: string;
+  dst_key: string;
+  score: number;
+};
+
+export type Vec3 = [number, number, number];
 
 export type Role =
   | 'ink'
@@ -85,6 +95,8 @@ const REL_ROLE: Record<string, Role> = {
   supports: 'green',
   contradicts: 'coral',
   derived_from: 'violet',
+  // similarity strands: texture, not a declared relation
+  similar: 'muted',
 };
 
 const MAX_NODES = 200;
@@ -94,6 +106,18 @@ const SPARSE_EDGES = 15;
 const EDGE_BUDGET = 0.2;
 /** Shortest projected edge worth drawing, in cells. */
 const MIN_EDGE_LEN = 3;
+/**
+ * Similarity strands are local texture: only pairs this close on the sphere
+ * (radians) get drawn. Longer ones cross the frame and read as noise.
+ * shortcut: tuned at 96x14; revisit if the grid grows or clusters spread.
+ */
+const SIMILAR_RANGE = 0.25;
+/**
+ * Attraction per link. Every pair repels, so n^2 repulsion outguns a unit pull
+ * and clusters smear across the frame; this keeps a link ahead of it. Declared
+ * edges stay the strongest relation (weight 1, similarity <= its score).
+ */
+const PULL = 8;
 
 // --- determinism -----------------------------------------------------------
 
@@ -131,6 +155,126 @@ export function seedPos(key: string): [number, number, number] {
   const t = r() * Math.PI * 2;
   const s = Math.sqrt(Math.max(0, 1 - z * z));
   return [Math.cos(t) * s, z, Math.sin(t) * s];
+}
+
+// --- layout ----------------------------------------------------------------
+
+/** Relaxation iterations: the cost is O(n^2) per pass, so it is capped twice. */
+const ITER_SMALL = 220;
+const ITER_LARGE = 120;
+
+/**
+ * Unit-sphere layout that follows the data.
+ *
+ * Seeds from `seedPos` (deterministic), then runs Fruchterman-Reingold:
+ * every pair repels, one link per `similar` pair (weight `score`) and per
+ * explicit edge (weight 1) attracts, and each pass renormalises back onto the
+ * sphere so `project()` keeps working. No clock, no `Math.random`: the same
+ * payload always gives the same points.
+ *
+ * With no `similar` pairs there is nothing to cluster on, so the hash seeds are
+ * returned untouched and the stage looks exactly as it did before.
+ *
+ * Call it once per graph payload and pass the result to `buildFrame`.
+ */
+export function layout(
+  nodes: AsciiNode[],
+  edges: AsciiEdge[],
+  similar: AsciiLink[] = [],
+): Map<string, Vec3> {
+  const list = selectNodes(nodes);
+  const out = new Map<string, Vec3>();
+  const index = new Map<string, number>();
+  list.forEach((n, i) => index.set(n.key, i));
+  const pos: Vec3[] = list.map((n) => seedPos(n.key));
+
+  if (similar.length === 0 || list.length < 3) {
+    list.forEach((n, i) => out.set(n.key, pos[i]));
+    return out;
+  }
+
+  type Link = { a: number; b: number; w: number };
+  const links: Link[] = [];
+  const add = (src: string, dst: string, w: number) => {
+    const a = index.get(src);
+    const b = index.get(dst);
+    if (a === undefined || b === undefined || a === b) return;
+    links.push({ a, b, w });
+  };
+  for (const s of similar) add(s.src_key, s.dst_key, clamp(s.score, 0, 1));
+  for (const e of edges) add(e.src_key, e.dst_key, 1);
+
+  const n = list.length;
+  const k = 1.6 / Math.sqrt(n);
+  const iters = n <= 140 ? ITER_SMALL : ITER_LARGE;
+  const disp = new Float64Array(n * 3);
+
+  for (let it = 0; it < iters; it++) {
+    disp.fill(0);
+    for (let i = 0; i < n; i++) {
+      const pi = pos[i];
+      for (let j = i + 1; j < n; j++) {
+        const pj = pos[j];
+        const dx = pi[0] - pj[0];
+        const dy = pi[1] - pj[1];
+        const dz = pi[2] - pj[2];
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-4;
+        const f = (k * k) / d; // repulsion
+        const ux = (dx / d) * f;
+        const uy = (dy / d) * f;
+        const uz = (dz / d) * f;
+        disp[i * 3] += ux;
+        disp[i * 3 + 1] += uy;
+        disp[i * 3 + 2] += uz;
+        disp[j * 3] -= ux;
+        disp[j * 3 + 1] -= uy;
+        disp[j * 3 + 2] -= uz;
+      }
+    }
+    for (const l of links) {
+      const pa = pos[l.a];
+      const pb = pos[l.b];
+      const dx = pa[0] - pb[0];
+      const dy = pa[1] - pb[1];
+      const dz = pa[2] - pb[2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-4;
+      const f = ((d * d) / k) * l.w * PULL; // attraction
+      const ux = (dx / d) * f;
+      const uy = (dy / d) * f;
+      const uz = (dz / d) * f;
+      disp[l.a * 3] -= ux;
+      disp[l.a * 3 + 1] -= uy;
+      disp[l.a * 3 + 2] -= uz;
+      disp[l.b * 3] += ux;
+      disp[l.b * 3 + 1] += uy;
+      disp[l.b * 3 + 2] += uz;
+    }
+
+    const temp = 0.09 * (1 - it / iters) + 0.004;
+    for (let i = 0; i < n; i++) {
+      const dx = disp[i * 3];
+      const dy = disp[i * 3 + 1];
+      const dz = disp[i * 3 + 2];
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d < 1e-9) continue;
+      const step = Math.min(d, temp) / d;
+      let x = pos[i][0] + dx * step;
+      let y = pos[i][1] + dy * step;
+      let z = pos[i][2] + dz * step;
+      const len = Math.sqrt(x * x + y * y + z * z);
+      if (len < 1e-9) {
+        pos[i] = seedPos(list[i].key);
+        continue;
+      }
+      x /= len;
+      y /= len;
+      z /= len;
+      pos[i] = [x, y, z];
+    }
+  }
+
+  list.forEach((node, i) => out.set(node.key, pos[i]));
+  return out;
 }
 
 export type Projected = { col: number; row: number; depth: number };
@@ -384,6 +528,60 @@ function dimLine(count: number, cols: number): string {
   return t.slice(0, Math.max(0, cols));
 }
 
+/**
+ * Nearest free cell: rings of cells around `p`, closest first, so a cluster
+ * that projects onto one cell still shows three glyphs instead of one.
+ */
+const SPIRAL: [number, number][] = (() => {
+  const out: [number, number][] = [];
+  for (let r = 1; r <= 3; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        out.push([dx, dy]);
+      }
+    }
+  }
+  // insertion order breaks ties: the ordering above is already deterministic
+  return out.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
+})();
+
+function place(
+  taken: Set<number>,
+  p: Projected,
+  cols: number,
+  rows: number,
+): Projected {
+  if (!taken.has(p.row * cols + p.col)) return p;
+  for (const [dx, dy] of SPIRAL) {
+    const col = p.col + dx;
+    const row = p.row + dy;
+    if (col < 0 || row < 0 || col >= cols || row >= rows) continue;
+    if (taken.has(row * cols + col)) continue;
+    return { col, row, depth: p.depth };
+  }
+  return p; // every ring taken: the node keeps the shared cell
+}
+
+/** A `similar` pair drawn as a strand: dotted dust, or solid when focused. */
+function linkEdge(l: AsciiLink, solid: boolean): AsciiEdge {
+  return {
+    src_key: l.src_key,
+    dst_key: l.dst_key,
+    rel: 'similar',
+    weight: solid ? 1 : 0.34,
+  };
+}
+
+export type FrameOptions = {
+  /** Cosine neighbour pairs; dotted strands under the declared edges. */
+  similar?: AsciiLink[];
+  /** A memory key: draw it and its neighbours, dim the rest. */
+  focus?: string | null;
+  /** Precomputed `layout()`; recomputed here only when omitted. */
+  pos?: Map<string, Vec3>;
+};
+
 /** One frame. Pure: identical args -> identical output. */
 export function buildFrame(
   nodes: AsciiNode[],
@@ -391,6 +589,7 @@ export function buildFrame(
   cols: number,
   rows: number,
   angle: number,
+  opts: FrameOptions = {},
 ): Frame {
   if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 8 || rows < 4) {
     return {
@@ -406,9 +605,34 @@ export function buildFrame(
   const synthetic = selected.length === 0;
   const list = synthetic ? synthField() : selected;
   const present = new Set(list.map((n) => n.key));
+  const similar = synthetic ? [] : (opts.similar ?? []);
 
+  const lights = new Set<string>();
+  if (!synthetic && opts.focus && present.has(opts.focus)) {
+    lights.add(opts.focus);
+    for (const e of edges) {
+      if (e.src_key === opts.focus) lights.add(e.dst_key);
+      else if (e.dst_key === opts.focus) lights.add(e.src_key);
+    }
+    for (const s of similar) {
+      if (s.src_key === opts.focus) lights.add(s.dst_key);
+      else if (s.dst_key === opts.focus) lights.add(s.src_key);
+    }
+  }
+  const focused = lights.size > 0;
+  const near = (key: string): boolean => !focused || lights.has(key);
+
+  const points = opts.pos ?? layout(list, edges, similar);
+
+  // Cells, nudged off each other so a cluster never hides a node.
+  const taken = new Set<number>();
   const pos = new Map<string, Projected>();
-  for (const n of list) pos.set(n.key, project(seedPos(n.key), angle, cols, rows));
+  for (const n of list) {
+    const raw = project(points.get(n.key) ?? seedPos(n.key), angle, cols, rows);
+    const cell = place(taken, raw, cols, rows);
+    taken.add(cell.row * cols + cell.col);
+    pos.set(n.key, cell);
+  }
 
   const ordered = list
     .map((n) => ({ n, p: pos.get(n.key)! }))
@@ -416,17 +640,43 @@ export function buildFrame(
 
   const buf = new CellBuf(cols, rows);
 
-  // Real edges that survive selection, long enough to read, nearest-last.
-  const strands = synthetic
-    ? []
-    : edges
-        .filter((e) => present.has(e.src_key) && present.has(e.dst_key))
-        .map((e) => {
-          const a = pos.get(e.src_key)!;
-          const b = pos.get(e.dst_key)!;
-          return { e, a, b, len: Math.max(Math.abs(b.col - a.col), Math.abs(b.row - a.row)) };
-        })
-        .filter((s) => s.len >= MIN_EDGE_LEN);
+  const strand = (src: string, dst: string) => {
+    const a = pos.get(src);
+    const b = pos.get(dst);
+    if (!a || !b) return null;
+    return { a, b, len: Math.max(Math.abs(b.col - a.col), Math.abs(b.row - a.row)) };
+  };
+
+  // Declared edges that survive selection and focus, long enough to read.
+  const strands = edges
+    .filter((e) => present.has(e.src_key) && present.has(e.dst_key))
+    .filter((e) => near(e.src_key) && near(e.dst_key))
+    .map((e) => {
+      const s = strand(e.src_key, e.dst_key);
+      return s ? { e, ...s } : null;
+    })
+    .filter((s): s is { e: AsciiEdge; a: Projected; b: Projected; len: number } =>
+      s !== null && s.len >= MIN_EDGE_LEN,
+    );
+
+  // Similarity strands are texture: read after the edges, never over a glyph.
+  const span = (a: string, b: string): number => {
+    const p = points.get(a);
+    const q = points.get(b);
+    if (!p || !q) return Infinity;
+    return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+  };
+  const links = similar
+    .filter((l) => present.has(l.src_key) && present.has(l.dst_key))
+    .filter((l) => near(l.src_key) && near(l.dst_key))
+    .filter((l) => focused || span(l.src_key, l.dst_key) <= SIMILAR_RANGE)
+    .map((l) => {
+      const s = strand(l.src_key, l.dst_key);
+      return s ? { e: linkEdge(l, focused), score: l.score, ...s } : null;
+    })
+    .filter((s): s is { e: AsciiEdge; a: Projected; b: Projected; len: number; score: number } =>
+      s !== null && s.len >= MIN_EDGE_LEN,
+    );
 
   const sparse = strands.length < SPARSE_EDGES;
   if (sparse) drawBackdrop(buf, cols, rows);
@@ -444,9 +694,19 @@ export function buildFrame(
     if (spent >= budget) break;
     spent += drawEdge(buf, s.a, s.b, s.e, budget - spent);
   }
+  const byScore = [...links].sort(
+    (x, y) => y.score - x.score || x.a.depth + x.b.depth - (y.a.depth + y.b.depth),
+  );
+  for (const s of byScore) {
+    if (spent >= budget) break;
+    spent += drawEdge(buf, s.a, s.b, s.e, budget - spent);
+  }
 
   // Nodes last, unconditional: they always win their own cell.
-  for (const { n, p } of ordered) buf.set(p.col, p.row, nodeGlyph(n), nodeRole(n));
+  for (const { n, p } of ordered) {
+    const lit = near(n.key);
+    buf.set(p.col, p.row, lit ? nodeGlyph(n) : '.', lit ? nodeRole(n) : 'faint');
+  }
 
   const { text, overlays } = buf.render();
   const hits: HitBox[] = synthetic

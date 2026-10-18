@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactElement } from 'react';
-import { buildFrame, OVERLAY_ROLES, ROLE_VAR } from './grid';
-import type { AsciiEdge, AsciiNode, HitBox, Role } from './grid';
+import { buildFrame, hashKey, layout, OVERLAY_ROLES, ROLE_VAR } from './grid';
+import type { AsciiEdge, AsciiLink, AsciiNode, HitBox, Role } from './grid';
 
 export type AsciiStageProps = {
   nodes: AsciiNode[];
   edges: AsciiEdge[];
+  /** Cosine neighbour pairs. Absent (old server) -> hash layout, no strands. */
+  similar?: AsciiLink[];
+  /** Selected memory key: it and its neighbours stay lit, the rest dims. */
+  focus?: string | null;
   cols?: number;
   rows?: number;
   fps?: number;
@@ -30,6 +34,8 @@ const CELL: CSSProperties = {
 export function AsciiStage({
   nodes,
   edges,
+  similar = [],
+  focus = null,
   cols = 96,
   rows = 14,
   fps = 12,
@@ -38,10 +44,23 @@ export function AsciiStage({
 }: AsciiStageProps): ReactElement {
   const baseRef = useRef<HTMLPreElement | null>(null);
   const layers = useRef<Map<Role, HTMLPreElement>>(new Map());
-  const data = useRef({ nodes, edges });
-  data.current = { nodes, edges };
-  const drawRef = useRef<() => void>(() => {});
   const [hits, setHits] = useState<HitBox[]>([]);
+
+  // One layout per payload: node identity, link count and the keys themselves
+  // decide it, so rotation, focus and toasts never pay for a relaxation pass.
+  const signature = useMemo(
+    () =>
+      `${nodes.length}:${edges.length}:${similar.length}:${nodes.reduce(
+        (h, n) => (Math.imul(h, 31) + hashKey(n.key)) | 0,
+        7,
+      )}`,
+    [nodes, edges, similar],
+  );
+  const points = useMemo(() => layout(nodes, edges, similar), [signature]);
+  const data = useRef({ nodes, edges, similar, focus, points });
+  data.current = { nodes, edges, similar, focus, points };
+
+  const drawRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const base = baseRef.current;
@@ -56,7 +75,11 @@ export function AsciiStage({
     let tick = 0;
 
     const draw = () => {
-      const frame = buildFrame(data.current.nodes, data.current.edges, cols, rows, angle);
+      const frame = buildFrame(data.current.nodes, data.current.edges, cols, rows, angle, {
+        similar: data.current.similar,
+        focus: data.current.focus,
+        pos: data.current.points,
+      });
       base.textContent = frame.text;
       for (const role of OVERLAY_ROLES) {
         const el = layers.current.get(role);
@@ -106,7 +129,7 @@ export function AsciiStage({
   // Static (reduced-motion) path still tracks prop changes.
   useEffect(() => {
     drawRef.current();
-  }, [nodes, edges]);
+  }, [nodes, edges, similar, focus, points]);
 
   return (
     <div

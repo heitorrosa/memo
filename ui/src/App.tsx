@@ -7,7 +7,6 @@ import { Toast, type ToastMsg } from "./components/Toast";
 import { useAsync } from "./hooks/useAsync";
 import { useHotkeys } from "./hooks/useHotkeys";
 import { getGraph, getStats, onUnauthorized, setToken, storedToken, type Stats } from "./lib/api";
-import { clock } from "./lib/format";
 import { KEYMAP, PANES, type PaneId } from "./lib/keymap";
 import { AgentsPanel } from "./panels/AgentsPanel";
 import { AppPanel } from "./panels/AppPanel";
@@ -88,62 +87,6 @@ function KeymapOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
-function StatusLine({
-  status,
-  stats,
-  toast,
-  now,
-}: {
-  status: "loading" | "ready" | "offline";
-  stats: Stats | null;
-  toast: ToastMsg | null;
-  now: Date;
-}) {
-  return (
-    <header className="flex h-7 shrink-0 items-center gap-2 overflow-hidden border-b border-line bg-surface px-3 text-muted">
-      <span className="text-ink">memo</span>
-      <span className="text-amber">v3</span>
-      <span aria-hidden="true" className="text-line">
-        ·
-      </span>
-      {status === "ready" && stats ? (
-        <>
-          <span>{stats.vec}</span>
-          <span aria-hidden="true" className="text-line">
-            ·
-          </span>
-          <span className="tabular text-ink">{stats.counts.memories}</span>
-          <span>memories</span>
-          <span aria-hidden="true" className="text-line">
-            ·
-          </span>
-          <span className="tabular text-ink">{stats.counts.skills}</span>
-          <span>skills</span>
-          <span aria-hidden="true" className="text-line">
-            ·
-          </span>
-          <span className="tabular text-ink">{stats.counts.agents}</span>
-          <span>agents</span>
-          <span aria-hidden="true" className="text-line">
-            ·
-          </span>
-          <span className="text-green">● connected</span>
-        </>
-      ) : status === "offline" ? (
-        <span className="text-coral">● offline</span>
-      ) : (
-        <span>connecting ...</span>
-      )}
-
-      <div className="ml-auto flex shrink-0 items-center gap-4">
-        {toast ? <Toast toast={toast} /> : null}
-        <span className="tabular text-ink">{clock(now)}</span>
-        <span className="microlabel">/ search ? keys</span>
-      </div>
-    </header>
-  );
-}
-
 export default function App() {
   const [token, setTokenState] = useState(() => storedToken());
   const [gateMessage, setGateMessage] = useState("");
@@ -152,7 +95,6 @@ export default function App() {
   const [overlay, setOverlay] = useState(false);
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
-  const [now, setNow] = useState(() => new Date());
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   // Any 401 during the session drops the token and brings the gate back.
@@ -173,11 +115,6 @@ export default function App() {
     () => (token ? getGraph(200) : Promise.resolve(null)),
     [token, reloadSignal],
   );
-
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -227,20 +164,16 @@ export default function App() {
   }
 
   const statsData = stats.state.status === "ready" ? stats.state.data : null;
-  const status = stats.state.status === "ready" ? "ready" : stats.state.status === "error" ? "offline" : "loading";
   const counts = statsData?.counts ?? null;
   const keyboard = !overlay;
 
   return (
     <Frame>
-      <div className="grid h-full grid-rows-[auto_minmax(0,1fr)]">
-        <StatusLine status={status} stats={statsData} toast={toast} now={now} />
-
+      <div className="grid h-full grid-rows-[minmax(0,1fr)]">
         <div className="grid min-h-0 grid-cols-[200px_minmax(0,1fr)]">
           <aside className="flex min-h-0 flex-col border-r border-line">
             <div className="px-3 pt-3">
               <Wordmark className="text-[9px] text-amber-dim" />
-              <p className="microlabel mt-1">memory server</p>
             </div>
 
             <nav className="mt-5 flex flex-col">
@@ -265,11 +198,6 @@ export default function App() {
                 />
               ))}
             </nav>
-
-            <div className="mt-auto px-3 pb-3">
-              <p className="microlabel">mouse optional</p>
-              <p className="microlabel">j k g G · ? for keys</p>
-            </div>
           </aside>
 
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
@@ -278,11 +206,15 @@ export default function App() {
               className="scan shrink-0 border-b border-line"
               meta={
                 graph.state.status === "ready" && graph.state.data
-                  ? `${graph.state.data.nodes.length} nodes · ${graph.state.data.edges.length} edges`
+                  ? `${graph.state.data.nodes.length} nodes · ${graph.state.data.edges.length} edges${
+                      graph.state.data.similar
+                        ? ` · ${graph.state.data.similar.length} links`
+                        : ""
+                    }`
                   : undefined
               }
             >
-              <div className="h-[9.5rem] overflow-hidden px-3 pb-1">
+              <div className="h-[12rem] overflow-hidden px-3 pb-1">
                 {graph.state.status === "loading" ? (
                   <Line kind="loading">loading ...</Line>
                 ) : graph.state.status === "error" ? (
@@ -293,6 +225,8 @@ export default function App() {
                   <AsciiStage
                     nodes={graph.state.data?.nodes ?? []}
                     edges={graph.state.data?.edges ?? []}
+                    similar={graph.state.data?.similar}
+                    focus={selection.memories}
                     onSelect={(key) => {
                       setPane("memories");
                       setSelection((current) => ({ ...current, memories: key }));
@@ -347,6 +281,12 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {toast ? (
+        <div role="status" className="pointer-events-none fixed bottom-2 right-3 z-30">
+          <Toast toast={toast} />
+        </div>
+      ) : null}
 
       {overlay ? <KeymapOverlay onClose={() => setOverlay(false)} /> : null}
     </Frame>

@@ -57,7 +57,6 @@ export function Gate({
       </form>
 
       <div className="flex w-full max-w-[27rem] flex-col gap-1">
-        <p className="microlabel">token lives in .env as MEMO_TOKEN</p>
         {busy ? <p className="text-muted">connecting ...</p> : null}
         {message ? <p className="text-coral">{message}</p> : null}
       </div>

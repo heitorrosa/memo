@@ -381,6 +381,7 @@ function Detail({
   if (!state.data) return <Line kind="empty">no memory selected</Line>;
 
   const { memory, edges, aliases, family, declarers } = state.data;
+  const related = state.data.related ?? [];
   const groups = new Map<string, typeof edges>();
   for (const edge of edges) {
     const bucket = groups.get(edge.rel);
@@ -417,6 +418,32 @@ function Detail({
           { label: "updated", value: text(memory.updated_at) },
         ]}
       />
+
+      <SectionHead meta={related.length}>related</SectionHead>
+      {related.length === 0 ? (
+        <p className="text-faint">no related memories</p>
+      ) : (
+        <ul className="mt-1">
+          {related.map((row, position) => (
+            <li key={row.key}>
+              <button
+                type="button"
+                onClick={() => onSelect(row.key)}
+                className="flex w-full items-baseline gap-2 hover:text-amber"
+              >
+                <span aria-hidden="true" className="text-line">
+                  {position === related.length - 1 ? "└─" : "├─"}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-ink">{row.key}</span>
+                <span className="tabular microlabel">{row.score.toFixed(2)}</span>
+                <span className="microlabel" style={{ color: typeColor(row.type) }}>
+                  {row.type}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <SectionHead meta={edges.length}>edges</SectionHead>
       {edges.length === 0 ? (

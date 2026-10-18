@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from starlette.testclient import TestClient
 
@@ -243,6 +244,103 @@ def test_ui_mount_serves_the_build_when_present(monkeypatch, tmp_path):
     finally:
         client.close()
         server.memo_conn.close()
+
+
+def _pin_embeddings(monkeypatch, mapping):
+    monkeypatch.setattr(embeddings, "embed",
+                        lambda texts: [mapping[text] for text in texts])
+
+
+def _unit(*parts):
+    vector = np.zeros(embeddings.DIM, dtype=np.float32)
+    vector[:len(parts)] = parts
+    vector /= np.linalg.norm(vector) + 1e-12
+    return vector.astype(np.float32).tobytes()
+
+
+def _save_value(client, key, value):
+    return save(client, key=key, type="context", value=value).json()
+
+
+def test_graph_similar_shape_and_dedup(api, monkeypatch):
+    client, _ = api
+    _pin_embeddings(monkeypatch, {"alpha": _unit(1, 0),
+                                  "beta": _unit(0.9, 0.1),
+                                  "gamma": _unit(0.4, 0.6)})
+    for key, value in (("m.a", "alpha"), ("m.b", "beta"), ("m.c", "gamma")):
+        assert _save_value(client, key, value)["action"] == "created"
+    body = client.get("/api/graph", headers=AUTH).json()
+    pairs = body["similar"]
+    assert pairs
+    keys = {node["key"] for node in body["nodes"]}
+    for pair in pairs:
+        assert set(pair) == {"src_key", "dst_key", "score"}
+        assert pair["src_key"] != pair["dst_key"]
+        assert pair["src_key"] in keys and pair["dst_key"] in keys
+    unordered = {frozenset((p["src_key"], p["dst_key"])) for p in pairs}
+    assert len(unordered) == len(pairs)
+    scores = [pair["score"] for pair in pairs]
+    assert scores == sorted(scores, reverse=True)
+    assert all(score >= 0.35 for score in scores)
+
+
+def test_graph_similar_retries_below_floor(api, monkeypatch):
+    client, _ = api
+    _pin_embeddings(monkeypatch, {"alpha": _unit(1, 0), "beta": _unit(0.3, 1)})
+    _save_value(client, "m.a", "alpha")
+    _save_value(client, "m.b", "beta")
+    pairs = client.get("/api/graph", headers=AUTH).json()["similar"]
+    assert len(pairs) == 1
+    assert 0.25 <= pairs[0]["score"] < 0.35
+
+
+def test_graph_similar_empty_below_retry_floor(api, monkeypatch):
+    client, _ = api
+    _pin_embeddings(monkeypatch, {"alpha": _unit(1, 0), "beta": _unit(0.2, 1)})
+    _save_value(client, "m.a", "alpha")
+    _save_value(client, "m.b", "beta")
+    body = client.get("/api/graph", headers=AUTH).json()
+    assert body["similar"] == []
+
+
+def test_graph_similar_deterministic_across_calls(api, monkeypatch):
+    client, _ = api
+    _pin_embeddings(monkeypatch, {"alpha": _unit(1, 0),
+                                  "beta": _unit(0.9, 0.1),
+                                  "gamma": _unit(0.4, 0.6)})
+    for key, value in (("m.a", "alpha"), ("m.b", "beta"), ("m.c", "gamma")):
+        _save_value(client, key, value)
+    first = client.get("/api/graph", headers=AUTH).json()["similar"]
+    second = client.get("/api/graph", headers=AUTH).json()["similar"]
+    assert first == second
+    assert first
+
+
+def test_memory_related_capped_and_self_excluded(api, monkeypatch):
+    client, _ = api
+    same = _unit(1, 0)
+    _pin_embeddings(monkeypatch, {f"value{index}": same for index in range(7)})
+    for index in range(7):
+        _save_value(client, f"m.{index}", f"value{index}")
+    related = client.get("/api/memories/m.0", headers=AUTH).json()["related"]
+    assert len(related) == 5
+    keys = [item["key"] for item in related]
+    assert "m.0" not in keys
+    assert len(set(keys)) == 5
+    assert all(set(item) == {"key", "type", "status", "uses", "score"}
+               for item in related)
+    scores = [item["score"] for item in related]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_similar_and_related_without_embeddings(api, monkeypatch):
+    client, _ = api
+    monkeypatch.setattr(embeddings, "embed", lambda texts: [b"" for _ in texts])
+    _save_value(client, "m.a", "alpha")
+    _save_value(client, "m.b", "beta")
+    assert client.get("/api/graph", headers=AUTH).json()["similar"] == []
+    detail = client.get("/api/memories/m.a", headers=AUTH).json()
+    assert detail["related"] == []
 
 
 def test_ui_mount_reports_not_built(tmp_path, monkeypatch):

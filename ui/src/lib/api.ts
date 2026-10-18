@@ -104,6 +104,17 @@ export interface MemoryDetail {
   aliases: Alias[];
   family: FamilyRow[];
   declarers: Declarer[];
+  /** Optional: older servers do not send it. */
+  related?: RelatedMemory[];
+}
+
+/** A close neighbour by embedding, not a declared relation. */
+export interface RelatedMemory {
+  key: string;
+  type: string;
+  status: string;
+  uses: number;
+  score: number;
 }
 
 export interface SkillSummary {
@@ -171,9 +182,17 @@ export interface GraphEdge {
   weight: number;
 }
 
+/** Cosine neighbour pair. Optional: older servers do not send it. */
+export interface GraphLink {
+  src_key: string;
+  dst_key: string;
+  score: number;
+}
+
 export interface Graph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  similar?: GraphLink[];
 }
 
 export interface Health {

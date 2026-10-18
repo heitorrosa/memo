@@ -144,13 +144,23 @@ export function SkillsPanel({
       ? `${list.state.data.total} skills${committed ? ` · q "${clip(committed, 18)}"` : ""}`
       : undefined;
 
+  // Nothing selected: the detail column is dropped so the list gets the whole
+  // pane instead of paying ~300px for a blank sheet.
+  const open = selected !== null;
+
   return (
     <div
       className={
-        active ? "grid h-full grid-cols-[minmax(0,1.25fr)_minmax(20rem,1fr)]" : "hidden"
+        active
+          ? `grid h-full ${
+              open
+                ? "grid-cols-[minmax(0,1.25fr)_minmax(20rem,1fr)]"
+                : "grid-cols-[minmax(0,1fr)]"
+            }`
+          : "hidden"
       }
     >
-      <div className="flex min-h-0 flex-col border-r border-line">
+      <div className={`flex min-h-0 flex-col ${open ? "border-r border-line" : ""}`}>
         <Panel
           title="SKILLS"
           meta={meta}
@@ -193,54 +203,56 @@ export function SkillsPanel({
           ) : null}
         </Panel>
         <p className="microlabel shrink-0 border-t border-line-soft px-3 py-1">
-          j k move · enter open · e patch
+          {selected ? "j k move · enter open · e patch" : "no skill selected · j k move · enter open"}
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {editing ? (
-          <form
-            className="px-4 pb-6 pt-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              apply();
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
+      {open ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {editing ? (
+            <form
+              className="px-4 pb-6 pt-2"
+              onSubmit={(event) => {
                 event.preventDefault();
-                setEditing(false);
-              }
-            }}
-          >
-            <SectionHead meta="POST /api/skills/{name}/revisions">
-              patch {selected}
-            </SectionHead>
-            <textarea
-              autoFocus
-              rows={12}
-              value={patch}
-              spellCheck={false}
-              onChange={(event) => setPatch(event.target.value)}
-              placeholder="append-only revision note"
-              className="mt-2 w-full resize-y border border-line bg-surface px-2 py-1"
-            />
-            <div className="mt-3 flex items-center gap-4">
-              <button type="submit" className="microlabel text-amber hover:text-ink">
-                {saving ? "saving ..." : "[enter] apply"}
-              </button>
-              <button
-                type="button"
-                className="microlabel hover:text-ink"
-                onClick={() => setEditing(false)}
-              >
-                [esc] cancel
-              </button>
-            </div>
-          </form>
-        ) : (
-          <SkillDetail state={detail.state} />
-        )}
-      </div>
+                apply();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setEditing(false);
+                }
+              }}
+            >
+              <SectionHead meta="POST /api/skills/{name}/revisions">
+                patch {selected}
+              </SectionHead>
+              <textarea
+                autoFocus
+                rows={12}
+                value={patch}
+                spellCheck={false}
+                onChange={(event) => setPatch(event.target.value)}
+                placeholder="append-only revision note"
+                className="mt-2 w-full resize-y border border-line bg-surface px-2 py-1"
+              />
+              <div className="mt-3 flex items-center gap-4">
+                <button type="submit" className="microlabel text-amber hover:text-ink">
+                  {saving ? "saving ..." : "[enter] apply"}
+                </button>
+                <button
+                  type="button"
+                  className="microlabel hover:text-ink"
+                  onClick={() => setEditing(false)}
+                >
+                  [esc] cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <SkillDetail state={detail.state} />
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
