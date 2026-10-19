@@ -8,6 +8,9 @@ import numpy as np
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_CACHE = "/models"
+# The image bakes the weights into /opt/memo/models, so a plain `docker run`
+# needs no mount; a /models bind mount still wins when it is present.
+BAKED_CACHE = "/opt/memo/models"
 DIM = 384
 
 model_singleton = None
@@ -17,7 +20,7 @@ force_fallback = False
 def load_model():
     from fastembed import TextEmbedding
 
-    cache = MODEL_CACHE if os.path.isdir(MODEL_CACHE) else None
+    cache = next((c for c in (MODEL_CACHE, BAKED_CACHE) if os.path.isdir(c)), None)
     return TextEmbedding(MODEL_NAME, cache_dir=cache)
 
 

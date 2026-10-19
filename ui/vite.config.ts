@@ -10,7 +10,9 @@ export default defineConfig({
   base: "/ui/",
   plugins: [react(), tailwindcss()],
   build: {
-    outDir: "../src/memo/static/ui",
+    // vite default: the dashboard is its own artifact (ui/dist). The docker
+    // image ships it at /app/ui; `make ui` copies it to src/memo/static/ui.
+    outDir: "dist",
     emptyOutDir: true,
   },
   server: {
