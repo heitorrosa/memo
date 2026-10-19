@@ -35,7 +35,9 @@ Never run two server processes against the same database: memo is the single wri
 
 ## Dashboard
 
-The dashboard is a terminal-style app (Vite, React, TypeScript, Tailwind) served at `/ui/`. It has four panes: MEMORIES, SKILLS, AGENTS, APP. The band above them draws the memory graph: the edges you declared plus the correlations the server computes between memories.
+<p align="center"><img src="assets/dashboard.png" alt="The memo dashboard: the memory graph above the memory list, the selected memory on the right" width="960"></p>
+
+A terminal app in the browser (Vite, React, TypeScript, Tailwind) served at `/ui/`. The band on top draws the memory graph - the edges you declared plus the correlations the server computes between memories. The panes below are MEMORIES, SKILLS, AGENTS and APP, and the pane on the right is the selected memory: its metadata, its edges, its aliases and the memories it resembles.
 
 | key | action |
 | --- | --- |
@@ -48,6 +50,36 @@ The dashboard is a terminal-style app (Vite, React, TypeScript, Tailwind) served
 | `?` | key map |
 
 The app calls the server under `/api/*` with the bearer token: `/api/stats`, `/api/memories`, `/api/skills`, `/api/agents`, `/api/graph`. Read the source in [`ui/`](ui/README.md).
+
+## How the memory works
+
+A memory is one row: a key, a value, a type, an embedding and a life span. The graph is not a separate thing you maintain - it falls out of the memories.
+
+```mermaid
+graph LR
+  A["an agent"] -->|"memory_search · memory_save"| S["memo server<br/>one process, one writer"]
+  S --> D[("memo.db<br/>memories · edges · aliases · skills")]
+  D --> E["embedding<br/>384 dims"]
+  D --> T["valid_from → valid_to"]
+  D --> F["family chain"]
+  E --> G["similarity graph<br/>computed when it is read"]
+  F --> G
+```
+
+**Saving** embeds the value, writes the row, and records the graph around it: an edge to the parent it revises, an alias for the other name it answers to, and a family id that ties the revisions together.
+
+**Searching** blends the vector similarity of the embedding, the full text match and the decay of stability with age. A hit is reinforced - its use count and stability go up, which is what keeps a useful fact at the top.
+
+**Correcting** is a write, not a guess. When a new value contradicts an old one, the ladder closes the old interval (`status='superseded'`, `valid_to`), points the new row at it (`superseded_by`, `relation_type='corrects'`) and keeps both in one family. The graph draws the conflict, so a reader cannot act on the stale rule.
+
+```mermaid
+graph LR
+  A["preference.style.tailwind<br/>current"] -->|"derived_from"| B["preference.style.tailwind.v2<br/>current"]
+  B -->|"corrects · contradicts"| C["preference.style.tailwind.old<br/>superseded, valid_to set"]
+  C -.->|"still answers to"| D["alias: style.tailwind"]
+```
+
+**Aliasing** lets a fact answer to more than one name: the segment `style.tailwind` points at the canonical key, so an agent can ask for the short name and still land on the right row.
 
 ## MCP clients
 
@@ -66,7 +98,6 @@ The OpenCode plugin in [`opencode-memo/`](opencode-memo/README.md) reads `MEMO_E
 | --- | --- | --- |
 | `MEMO_TOKEN` | required for HTTP mode | Bearer token for `/mcp` and `/api/*`. Send `Authorization: Bearer <token>`, or `?access_token=<token>` on the `/mcp` URL for clients that cannot set headers. The header wins when both are present. |
 | `MEMO_DB` | `/data/memo.db` | Path of the SQLite file inside the container. |
-| `MEMO_UI_DIR` | the dashboard baked in the image | Directory the server serves at `/ui/`. |
 | `MEMO_API` | `http://127.0.0.1:5000` | Upstream server the `ui` mode proxies to. |
 | `MEMO_ENDPOINT` | `http://localhost:8000/mcp` | Server URL used by the OpenCode plugin. |
 | `MEMO_LOG` | unset | Set `debug` to log maintenance passes. |
@@ -85,17 +116,6 @@ python scripts/fetch_model.py
 
 It writes `./models`. Mount that directory at `/models` to use it in a container.
 
-## Maintenance
-
-`scripts/backfill_graph.py` fills in edges and aliases for memories saved before the graph writer existed. It reports and changes nothing unless you pass `--apply`:
-
-```sh
-python scripts/backfill_graph.py data/memo.db          # report only
-python scripts/backfill_graph.py data/memo.db --apply  # write
-```
-
-Stop the memo container before you apply. On a Windows bind mount a host write while the container holds `memo.db` open breaks the container's SQLite handle, and every write endpoint then answers 500 `unable to open database file`. The script is idempotent: a second `--apply` adds nothing.
-
 ## Development
 
 ```sh
@@ -105,14 +125,6 @@ make run                 # docker compose up -d --build, then logs
 make docker-build        # build the image
 pytest tests/ -q
 ```
-
-### Layout
-
-- `src/memo/server/api/` - the dashboard HTTP layer (FastAPI): `__init__` builds the app, `models` holds the pydantic models, and `memories`, `skills`, `agents`, `graph`, `stats` register their own routes.
-- `src/memo/server/http.py` - the bearer wrapper, `/health`, the `/ui` mount and the MCP mount.
-- `src/memo/memory/`, `src/memo/skills/`, `src/memo/models/` - the domain: writing, searching, the graph and the skill store.
-- `ui/` - the dashboard (Vite, React, TypeScript, Tailwind); `ui/src/ascii/` draws the graph.
-- `scripts/` - `backfill_graph.py` fills the edges and aliases of older memories, `fetch_model.py` pre-fetches the weights.
 
 ## License
 
