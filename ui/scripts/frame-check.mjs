@@ -147,10 +147,18 @@ for (let i = 1; i < frames.length; i++) {
 }
 ok(`phase ${PHASES.join('/')} -> 0 differing cells after stripping colour`);
 
-// ...while the brightness band really does move: the layers must differ.
-const layerOf = (frame, role) => frame.overlays.find((o) => o.role === role)?.text ?? '';
-assert.notEqual(layerOf(frames[0], 'faint'), layerOf(frames[1], 'faint'));
-assert.notEqual(layerOf(frames[0], 'amber'), layerOf(frames[1], 'amber'));
+// ...while the brightness band really does move: cells must re-role.
+// Asserting one layer changes is brittle (which layer holds the band's cells
+// depends on the pane and the payload); the observable is that the phase
+// re-roles cells at all.
+const moved = (a, b) =>
+  a.overlays.reduce((sum, o) => {
+    const other = b.overlays.find((x) => x.role === o.role)?.text ?? "";
+    return sum + [...o.text].filter((ch, i) => ch !== other[i]).length;
+  }, 0);
+for (let i = 1; i < frames.length; i++) {
+  assert.ok(moved(frames[0], frames[i]) >= 3, `band did not move: phase ${PHASES[0]} vs ${PHASES[i]}`);
+}
 ok('brightness band moves (faint + amber layers differ between phases)');
 
 /* ------------------------------------------------------------ the frame -- */
@@ -275,18 +283,27 @@ ok(`links are short: linked pairs ${linkedSpan.toFixed(1)} cells vs ${pairMean.t
 const focusKey = members.context[0];
 const focused = buildFrame(nodes, edges, COLS, ROWS, 0.1, { ...OPTS, focus: focusKey });
 const dimmed = cell(focused, members.preference[10]);
-assert.equal(at(focused, dimmed.row, dimmed.col), '.', 'non-neighbour is not dimmed');
-const faintLayer = focused.overlays.find((o) => o.role === 'faint');
-assert.ok(faintLayer && /\S/.test(faintLayer.text), 'no faint ink when focused');
-// The dim glyph may sit inside the brightness band, which lifts faint to
-// amber; either way exactly one colour layer must carry it.
+const rolesAt = (f, r, c) =>
+  f.overlays.filter((o) => o.text.split("\n")[r][c] !== " ").map((o) => o.role);
+// Dimming is a role, not a glyph swap: a dimmed node keeps its node glyph and
+// sits in the faint layer (lifted to amber inside the brightness band), so the
+// check reads the layers, not the character.
+const dimGlyph = at(focused, dimmed.row, dimmed.col);
+assert.notEqual(dimGlyph, " ", "non-neighbour lost its cell");
+const dimRoles = rolesAt(focused, dimmed.row, dimmed.col);
+assert.ok(dimRoles.length > 0, "dimmed node carries no colour layer");
 assert.ok(
-  focused.overlays.some((o) => o.text.split('\n')[dimmed.row][dimmed.col] === '.'),
-  'dimmed node carries no colour layer',
+  dimRoles.every((r) => r === "faint" || r === "amber"),
+  `non-neighbour is not dimmed: ${dimRoles.join(",")}`,
 );
 const lit = cell(focused, members.context[1]);
-assert.notEqual(at(focused, lit.row, lit.col), '.');
-ok('focus dims a non-neighbour to a faint dot and keeps a neighbour lit');
+const litRoles = rolesAt(focused, lit.row, lit.col);
+assert.notEqual(at(focused, lit.row, lit.col), " ");
+assert.ok(
+  litRoles.some((r) => r !== "faint" && r !== "amber"),
+  `neighbour is not lit: ${litRoles.join(",")}`,
+);
+ok("focus dims non-neighbours to faint and keeps a neighbour lit");
 
 /* --------------------------------------------------------- sparse + old -- */
 

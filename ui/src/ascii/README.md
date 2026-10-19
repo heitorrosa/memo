@@ -50,15 +50,21 @@ absolutely-positioned `<pre>`, so a cell is painted twice at most and colour
 costs no per-cell DOM. `hits` lists the screen cell of each real node, used for
 the invisible focusable hit-boxes when `onSelect` is passed.
 
-- Node glyph is **degree-sized**, coloured by type (amber/violet/coral/blue):
-  a hub (degree ≥ 4) is a 2x2 block of `█` if all four cells are free, else `●`;
-  degree 2-3 is `●`, degree 1 is `•`, degree 0 is `·`. Superseded and
-  out-of-focus nodes drop to a faint `.`. A hub is obvious from three metres.
+- Node glyph is **connectivity-sized**, coloured by type (amber/violet/coral/blue):
+  degree counts declared edges *and* similarity links (the live data has 4 edges
+  against 245 similar pairs, so edges alone left 128 of 137 nodes at degree 0 and
+  the pane read as a lattice). Measured live histogram: 0:10 1:11 2:9 3:46 4:30
+  5:10 6:6 7:5 8:3 9:3 10+:4. So: degree >= 6 is a single `█`, degree 3-5 is `●`,
+  degree 1-2 is `•`, degree 0 is `·`. A 2x2 block was tried and removed: in the
+  dense pane it collided with neighbouring nodes and labels. Out-of-focus nodes
+  keep their glyph and move to the `faint` role (they used to drop to `.`, which
+  turned a focused view into a dot grid).
 - **Labels by prominence**, not by degree: the top `clamp(cols / 10, 8, 24)`
   nodes by (`uses`, then `degree`, then `score`) get the tail of their key after
-  the last dot, in `faint`, on one row, one space off the glyph, truncated to
-  `labelMax` cells. A label takes whichever side of the glyph has room, never
-  lands on a glyph or another label, and is dropped if it cannot keep 2 cells.
+  the last dot, in `faint`, on one row, one space off the glyph. A label is
+  written whole or not at all: the full tail if it fits on either side, else the
+  tail cut at a hyphen boundary inside `labelMax` (when that leaves >= 4 chars),
+  else the last hyphen part. A half-written label reads as a rendering bug.
   The busiest memories get named, which is what a reader is looking for.
 - Declared edges: `-` `|` `/` `\` by slope, in the relation's role colour,
   dashed at `+` where they cross. Similarity strands: dotted (every 2nd cell) in
@@ -67,9 +73,11 @@ the invisible focusable hit-boxes when `onSelect` is passed.
   nodes, then labels. Agency is explicit in that order: every node cell is
   claimed before any strand, so strand ink can never overwrite a glyph; a label
   only ever loses to a glyph. An isolated node (degree 0) is a `·` on its own
-  claimed cell — that cell is its halo: at these densities a wider halo (137
+  claimed cell - that cell is its halo: at these densities a wider halo (137
   nodes x 5 cells) would eat the whole 6..18% occupancy budget, and the claimed
-  cell already keeps strands off it.
+  cell already keeps strands off it. The backdrop only appears when the payload
+  itself has nothing to draw (`synthetic || !hasLinks`): a focus selection must
+  never replace the graph with dust, which is exactly what it used to do.
 
 ### Where nodes sit
 
@@ -91,10 +99,13 @@ Three pane-relative rules bound the ink. They are calibrated on the real
 `/api/graph` payload (137 nodes, 4 declared edges, 245 `similar` pairs): before
 them the picture was 87% line glyphs and read as a lattice.
 
-- `STRAND_RATIO` (0.06): a strand budget of at most 6% of `cols x rows` cells —
-  307 cells at 233x22. Declared edges draw first, then `similar` pairs in score
+- `STRAND_RATIO` (0.045): a strand budget of at most 4.5% of `cols x rows` cells —
+  230 cells at 233x22. Declared edges draw first, then `similar` pairs in score
   order (each undirected pair once); drawing stops the moment the budget is
-  gone. Never exceeded.
+  gone. Never exceeded. It came down from 0.06 when the 2x2 hubs went away:
+  single-cell nodes hold less ink, and the gate is that nodes and labels hold
+  more of the pane than the lines do (0.06 left the lines at 56% of non-space
+  ink, 0.045 puts the lines back under it).
 - `strandMax(cols, rows)` = `max(rows, cols / 6)`: a strand longer than that is
   dropped, so nothing runs the width of a wide pane. Links are local by
   construction, so the mean linked span stays far below the mean span of

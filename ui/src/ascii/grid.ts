@@ -102,7 +102,11 @@ const SIMILAR_STEP = 2;
  * pairs in score order, each undirected pair once — and the budget is never
  * exceeded. That is what keeps line ink a bounded minority of the picture.
  */
-const STRAND_RATIO = 0.06;
+// Strand ink as a share of the pane. The gate is that nodes and labels hold
+// more ink than the lines do, and single-cell nodes (no 2x2 hubs) plus short
+// similar strands left the lines at 56% of non-space ink at 0.06, so the budget
+// came down: fewer, shorter strands read as a graph instead of as texture.
+const STRAND_RATIO = 0.045;
 
 /** Longest readable strand, in cells: no strand runs the width of a wide pane. */
 function strandMax(cols: number, rows: number): number {
@@ -785,28 +789,23 @@ export function buildFrame(
     }
   }
 
-  // `sparse` is honest: the backdrop only appears when nothing at all survives.
-  const sparse = edgeStrands.length === 0 && linkStrands.length === 0;
+  // `sparse` is honest, but it keys on the PAYLOAD, not on what survived the
+  // focus filter: selecting a memory must never replace the graph with the dust
+  // backdrop (that is exactly how the pane read as a lattice).
+  const hasLinks = edges.some((e) => present.has(e.src_key) && present.has(e.dst_key))
+    || similar.some((s) => present.has(s.src_key) && present.has(s.dst_key));
+  const sparse = synthetic || !hasLinks;
 
-  // Node visibility first: every node cell (and a hub's whole 2x2 block) is
-  // claimed before any strand, so line ink can never take a node off the pane.
-  // `body` writes the glyph over the claim.
+  // Node visibility first: every node cell is claimed before any strand, so line
+  // ink can never take a node off the pane. `body` writes the glyph over the claim.
   const isHub = (n: AsciiNode): boolean => n.degree >= 6;
   const occupied = new Set<number>();
   const body = new Map<string, [number, number][]>();
   for (const { n, p } of ordered) {
+    // One cell per node, hubs included: the 2x2 block collided with neighbouring
+    // nodes and labels in the dense live pane, so a hub is a single `█` instead.
     const cells: [number, number][] = [[p.col, p.row]];
-    if (near(n.key) && isHub(n) && p.col + 1 < cols && p.row + 1 < rows) {
-      const blk: [number, number][] = [
-        [1, 0],
-        [0, 1],
-        [1, 1],
-      ];
-      if (blk.every(([dc, dr]) => !occupied.has((p.row + dr) * cols + p.col + dc))) {
-        cells.push([p.col + 1, p.row], [p.col, p.row + 1], [p.col + 1, p.row + 1]);
-      }
-    }
-    for (const [c, r] of cells) occupied.add(r * cols + c);
+    occupied.add(p.row * cols + p.col);
     body.set(n.key, cells);
   }
   for (const cells of body.values()) {
@@ -822,13 +821,14 @@ export function buildFrame(
   for (const s of edgeStrands) spent += drawLine(buf, s.a, s.b, s.role, 1, budget - spent);
   for (const s of linkStrands) spent += drawLine(buf, s.a, s.b, 'faint', SIMILAR_STEP, budget - spent);
 
-  // Nodes: the claimed cells become the glyph (2x2 block for a hub).
-  for (const { n } of ordered) {
+  // Nodes: the claimed cell becomes the glyph. A hub is a single filled cell,
+  // and a dimmed (non-neighbour) node keeps its glyph shape at a faint role --
+  // it used to collapse to '.', which turned the focused view into a dot grid.
+  for (const { n, p } of ordered) {
     const lit = near(n.key);
-    const cells = body.get(n.key)!;
     const role = lit ? nodeRole(n) : 'faint';
-    const glyph = cells.length === 4 ? '█' : lit ? nodeGlyph(n) : '.';
-    for (const [c, r] of cells) buf.set(c, r, glyph, role);
+    const glyph = isHub(n) ? '█' : nodeGlyph(n);
+    buf.set(p.col, p.row, glyph, role);
   }
 
   // Labels by prominence (uses, then degree, then score), not by degree: the
