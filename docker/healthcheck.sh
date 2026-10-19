@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Mode-aware healthcheck: the entrypoint writes the mode it started into
-# /tmp/memo-mode, because the three launchables expose different surfaces.
-#   all     -> the public port (nginx) proxying /health
-#   server  -> the memo server on its own port
-#   ui      -> the dashboard itself (the API it fronts may live elsewhere)
 set -u
 
 mode="$(cat /tmp/memo-mode 2>/dev/null || echo all)"

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# memo: one image, three launchables, one public port.
-#
-#   all    (default) memo server on 127.0.0.1:5000 (internal) + nginx on :8080 (public)
-#   server             memo server only, on 0.0.0.0:${MEMO_PORT:-5000}
-#   ui                 nginx only on :8080, proxying the API to ${MEMO_API:-http://127.0.0.1:5000}
 set -euo pipefail
 
 MEMO_DB="${MEMO_DB:-/data/memo.db}"
@@ -23,7 +18,6 @@ stop_children() {
     [ -n "$memo_pid" ] && kill "$memo_pid" 2>/dev/null || true
     [ -n "$nginx_pid" ] && kill "$nginx_pid" 2>/dev/null || true
 }
-# SIGTERM (docker stop) must reach the memo server, not leave it to be killed.
 trap 'stop_children; exit 143' TERM INT
 trap stop_children EXIT
 
@@ -38,8 +32,6 @@ EOF
     exit 2
 }
 
-# nginx needs the upstream before it starts: a name is resolved by nginx
-# through the resolver, so resolve it here and hand nginx an address.
 render_nginx() {
     python - "$NGINX_TEMPLATE" "$NGINX_CONF" <<'PY'
 import ipaddress
@@ -118,8 +110,6 @@ run_all() {
     log "starting nginx on :8080"
     nginx -g 'daemon off;' &
     nginx_pid=$!
-    # The memo server dying must take the container down, so the restart
-    # policy brings the pair back up together.
     wait -n "$memo_pid" "$nginx_pid" || true
     log "a child process exited; stopping the container"
     exit 1

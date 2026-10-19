@@ -1,20 +1,3 @@
-"""Backfill edges and aliases for memories saved before the graph writer existed.
-
-Rows written by the older migration path never ran `record_edges`, so most
-memories are "bare": no aliases, and the only edges are the ones the MCP clients
-declared by hand.
-
-Dry run by default. Point it at a COPY of the DB, or stop the memo container
-first: on a Windows bind mount a host write while the container holds memo.db
-open breaks the container's SQLite handle, and every write endpoint then answers
-500 "unable to open database file".
-
-    python scripts/backfill_graph.py data/memo.db            # report only
-    python scripts/backfill_graph.py data/memo.db --apply    # write
-
-Idempotent: a second --apply adds nothing (the writers ignore what exists).
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -25,13 +8,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from memo.db import connect as db_connect  # noqa: E402
-from memo.embeddings import cosine  # noqa: E402
-from memo.memory.graph import record_alias, record_link  # noqa: E402
+from memo.db import connect as db_connect
+from memo.embeddings import cosine
+from memo.memory.graph import record_alias, record_link
 
-TOP_K = 3  # neighbours per memory, mirroring the read-time layer in server/api.py
-FLOOR = 0.5  # cosine below this is noise, not a relationship
-CAP = 400  # hard ceiling on materialised similarity edges
+TOP_K = 3
+FLOOR = 0.5
+CAP = 400
 ALIAS_DECLARER = "backfill:key"
 LINK_DECLARER = "backfill:similarity"
 
@@ -47,7 +30,6 @@ def fetch(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
 
 
 def plan_aliases(memories: list[dict], existing: dict[tuple[str, str], str]) -> list[tuple[str, str, str]]:
-    """(namespace, segment, canonical) for keys that lack one."""
     out: list[tuple[str, str, str]] = []
     by_ns: dict[str, list[dict]] = {}
     for m in memories:
@@ -64,7 +46,7 @@ def plan_aliases(memories: list[dict], existing: dict[tuple[str, str], str]) -> 
                 continue
             if "." in key:
                 tail = key.rsplit(".", 1)[1]
-                if tails.get(tail, 0) != 1:  # ambiguous shorthand
+                if tails.get(tail, 0) != 1:
                     continue
                 segment = tail
             else:
@@ -72,14 +54,13 @@ def plan_aliases(memories: list[dict], existing: dict[tuple[str, str], str]) -> 
             if not segment or segment == key:
                 continue
             known = existing.get((ns, segment))
-            if known is not None:  # already maps somewhere
+            if known is not None:
                 continue
             out.append((ns, segment, key))
     return out
 
 
 def plan_similarity(memories: list[dict]) -> list[tuple[str, str, str, float]]:
-    """(namespace, src, dst, score) top-K per memory, undirected, capped."""
     with_vectors = [m for m in memories if m["embedding"]]
     scores: dict[tuple[str, str, str], tuple[str, str, float]] = {}
     for i, a in enumerate(with_vectors):
@@ -98,7 +79,6 @@ def plan_similarity(memories: list[dict]) -> list[tuple[str, str, str, float]]:
                 if key in scores and scores[key][2] >= score:
                     continue
                 scores[key] = pair
-    # keep the top-K neighbours of each node, then dedupe the undirected pair
     best: dict[tuple[str, str, str], tuple[str, str, str, float]] = {}
     for (ns, src, dst), pair in scores.items():
         un = (ns, *sorted((src, dst)))
@@ -121,7 +101,6 @@ def plan_similarity(memories: list[dict]) -> list[tuple[str, str, str, float]]:
 
 
 def plan_families(memories: list[dict]) -> list[tuple[str, str, str]]:
-    """(namespace, src, dst) chaining revisions of one family oldest -> newest."""
     families: dict[tuple[str, str], list[dict]] = {}
     for m in memories:
         if m["family_id"]:
@@ -137,7 +116,7 @@ def plan_families(memories: list[dict]) -> list[tuple[str, str, str]]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser()
     ap.add_argument("db", help="path to memo.db (use a copy, or stop the container)")
     ap.add_argument("--apply", action="store_true", help="write; default is a dry run")
     args = ap.parse_args()
@@ -178,9 +157,6 @@ def main() -> int:
             print(f"  edge   {ns}: {src} -{score:.3f}-> {dst}")
         return 0
 
-    # The writers run through peewee on their own connection to the same file, so
-    # no outer transaction is held here: an open write lock would make them wait
-    # out busy_timeout and fail with "database is locked".
     for ns, segment, canonical in aliases:
         record_alias(conn, segment, canonical, ALIAS_DECLARER, ns)
     for ns, src, dst, score in similar:

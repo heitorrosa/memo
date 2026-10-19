@@ -1,45 +1,3 @@
-"""Labeled retrieval benchmark for graph expansion (review issue #4 + classifier observation).
-
-This is a *measurement* benchmark, not a tuning harness. It seeds a deterministic
-multi-turn memory dataset (frozen clock, fallback embeddings, tmp DBs only) and
-reports retrieval quality with graph expansion OFF versus ON. The fusion
-coefficients are logged, never retuned.
-Token overhead is a character proxy: summed len(value) of the returned top-10,
-averaged per query (no tokenizer is run).
-
-Measured table (frozen clock 2026-10-16T12:00:00-03:00, fallback embeddings,
-13 fixed queries over 4 topics, labels inline below; graph OFF vs ON):
-
-    fusion weights: vector=0.60 text=0.25 retention=0.15 (MEASURE-ONLY)
-    metric                     OFF       ON      floor
-    Recall@5                 0.369    0.692     ON >= OFF
-    Recall@10                0.462    0.815     ON >= OFF
-    nDCG@10                  0.528    0.809     ON >= OFF
-    irrelevant rate@10       0.792    0.615     ON <= OFF + 0.15
-    token overhead (chars/q)   270      281     report-only
-    latency median (ms)       16.0     26.0      ON <= 3x OFF
-    temporal errors             0        0      == 0 both
-    contradiction errors        0        0      ON == 0
-
-    classifier (temporal.classify + is_trivia), 27 labeled cases:
-      unrelated 5/5  qualifies 5/5  extends 5/5  contradicts 5/5
-      reasserts 4/4  trivia 3/3      overall 27/27 = 1.000
-
-Why expansion helps here: expansion scores a neighbor as source_rank x edge_weight
-x 0.6, so it can only lift a related fact whose *own* fused score is low. The
-dataset therefore ages every fact uniformly (BACKDATE_DAYS) so the lexically
-matched anchor stands out by its text term while its graph neighbors sit in the
-same low band as unrelated filler; expansion then lifts the neighbors above the
-filler. This is the honest regime in which the feature has an effect.
-
-Dataset: 4 topics (homelab, frontend, study, garden), each an anchor fact plus 4
-related children (derived_from, confirmed by two declarers), one expired fact
-(past valid_until) and one future-dated fact (future valid_from) whose values
-match the query token so a broken validity filter surfaces them. Plus one
-superseded pair (produced by the save ladder) and one declared contradiction
-pair carrying an alias. Filler keys are lexically distinct so the FUZZ_HIT=80
-matcher never merges them; test_dataset_integrity pins the exact key set.
-"""
 from __future__ import annotations
 
 import datetime
@@ -285,7 +243,7 @@ def evaluate(bench, tmp_path, flag, tag):
     latencies = []
     temporal_errors = []
     contradiction_errors = []
-    for index, (query, relevant, _distractors) in enumerate(QUERIES):
+    for index, (query, relevant, _) in enumerate(QUERIES):
         conn, hits, elapsed_ms = run_query(
             bench, query, flag, tmp_path / f"{tag}_{index}.db")
         latencies.append(elapsed_ms)

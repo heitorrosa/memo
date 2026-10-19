@@ -49,8 +49,6 @@ def insert_row(conn, key, value, embedding, status, valid_from, valid_to=None,
 
 
 def seed_scale(conn):
-    """721 rows in one namespace: 700 unrelated fillers, 20 superseded
-    historical rows, then the relevant needle inserted last (highest rowid)."""
     needle = embeddings.embed([QUERY])[0]
     filler = orthogonal_to(needle)
     old = (temporal.parse_ts(temporal.now_iso())
@@ -85,8 +83,6 @@ def test_scale_needle_reaches_ranking_past_bound(tmp_path):
 
 
 def graph_linked_superseded(tmp_path, name):
-    """editor.indent (old, superseded) is a graph neighbour of the eligible
-    editor.notes; the superseding row editor.indent.v2 is future-dated."""
     conn = mem(tmp_path, name)
     save(conn, "editor.indent", "editor indent tabs legacy", type="preference",
          valid_from="2026-01-01")
@@ -128,7 +124,6 @@ def test_expansion_respects_as_known_at_policy(tmp_path):
     save(conn, "lab.child", "childunit value", type="preference",
          valid_from="2026-01-01",
          links=[{"to": "lab.anchor", "rel": "derived_from"}])
-    # anchor existed before `known`; child was created after it.
     conn.execute("UPDATE memories SET created_at='2026-09-01T00:00:00+00:00'"
                  " WHERE key='lab.anchor'")
     conn.execute("UPDATE memories SET created_at='2026-10-05T00:00:00+00:00'"

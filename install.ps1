@@ -8,8 +8,6 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-# The token is the only thing a new user has to keep: the image ships the
-# dashboard and the embedding weights, so nothing has to be fetched first.
 $envFile = Join-Path $root ".env"
 if (Test-Path $envFile) {
     Write-Host ".env already exists, keeping its MEMO_TOKEN"
@@ -22,7 +20,6 @@ if (Test-Path $envFile) {
 }
 $token = (Get-Content $envFile | Select-String '^MEMO_TOKEN=').ToString().Split('=', 2)[1].Trim()
 
-# The database lives in ./data so it survives container recreates.
 $dataDir = Join-Path $root "data"
 if (-not (Test-Path $dataDir)) {
     New-Item -ItemType Directory -Path $dataDir | Out-Null

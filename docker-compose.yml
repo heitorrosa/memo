@@ -3,16 +3,11 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      # nginx is the public face: the dashboard on /ui/ and the API on /api/,
-      # same origin, no CORS. The memo server itself stays on 127.0.0.1:5000.
       - "8080:8080"
     volumes:
       - ./data:/data
-      # Optional: the image bakes the embedding weights into /opt/memo/models,
-      # so this mount is only needed to override them with your own copy.
       - ./models:/models:ro
     env_file:
-      # MEMO_TOKEN (the bearer token for /mcp) lives in .env.
       - .env
     healthcheck:
       test: ["CMD", "/opt/memo/docker/healthcheck.sh"]
