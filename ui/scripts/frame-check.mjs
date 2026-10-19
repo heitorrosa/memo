@@ -22,7 +22,7 @@ const ok = (name) => {
 const COLS = 243;
 const ROWS = 22;
 const TOTAL = COLS * ROWS + ROWS - 1;
-const NODE_GLYPHS = new Set(['●', '█', '•', '·', '.']);
+const NODE_GLYPHS = new Set(['■', '●', '•', '·', '.']);
 
 /* ------------------------------------------------------------- fixture -- */
 
@@ -250,7 +250,7 @@ for (let row = 0; row < ROWS; row++) {
     longest = Math.max(longest, run);
   }
 }
-const glyphInk = (frame.text.match(/[●█•·]/g) ?? []).length;
+const glyphInk = (frame.text.match(/[■●•·]/g) ?? []).length;
 const labelInk = (frame.text.match(/[A-Za-z0-9]/g) ?? []).length;
 const nodeShare = (glyphInk + labelInk) / nonSpace;
 const lineInk = nonSpace - glyphInk - labelInk;
@@ -337,7 +337,7 @@ const PANES = [
   [233, 14],
 ];
 const LINE_GLYPHS = /[-|\\/+]/;
-const VISIBLE_GLYPHS = new Set(['●', '█', '•', '·']);
+const VISIBLE_GLYPHS = new Set(['■', '●', '•', '·']);
 // Seven phases evenly spaced over the brightness cycle: `render` moves the band
 // 12 diagonal cells per unit of phase, so 1.6 apart is a ~19-cell step — far
 // enough that the coloured role map must differ, not just by rounding.

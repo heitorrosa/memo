@@ -524,6 +524,7 @@ function nodeRole(n: AsciiNode): Role {
  * nodes live) are a 2x2 block of `█`, drawn by `drawNodes`.
  */
 function nodeGlyph(n: AsciiNode): string {
+  if (n.degree >= 6) return '■';
   if (n.degree >= 3) return '●';
   if (n.degree >= 1) return '•';
   return '·';
@@ -803,7 +804,8 @@ export function buildFrame(
   const body = new Map<string, [number, number][]>();
   for (const { n, p } of ordered) {
     // One cell per node, hubs included: the 2x2 block collided with neighbouring
-    // nodes and labels in the dense live pane, so a hub is a single `█` instead.
+    // nodes and labels in the dense live pane, so a hub is one heavier glyph
+    // (`■`) instead of four full blocks.
     const cells: [number, number][] = [[p.col, p.row]];
     occupied.add(p.row * cols + p.col);
     body.set(n.key, cells);
@@ -827,7 +829,7 @@ export function buildFrame(
   for (const { n, p } of ordered) {
     const lit = near(n.key);
     const role = lit ? nodeRole(n) : 'faint';
-    const glyph = isHub(n) ? '█' : nodeGlyph(n);
+    const glyph = nodeGlyph(n);
     buf.set(p.col, p.row, glyph, role);
   }
 

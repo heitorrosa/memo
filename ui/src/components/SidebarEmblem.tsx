@@ -7,7 +7,7 @@ import { LOGO_MASK } from "../ascii/logo-mask";
  * 4px cells put the whole mark in ~158px, inside the 264px rail.
  */
 const EMBLEM = LOGO_MASK.map((row) =>
-  row.replace(/[#+ ]/g, (cell) => (cell === "#" ? "█" : cell === "+" ? "▒" : " ")),
+  row.replace(/[#+. ]/g, (cell) => (cell === "#" ? "█" : cell === "+" ? "▒" : " ")),
 ).join("\n");
 
 /** Static sidebar mark: no props, no animation, no rAF. */
