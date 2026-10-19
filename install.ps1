@@ -1,12 +1,13 @@
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
-$image = "ghcr.io/heitorrosa/memo:3.0.0"
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Error "Docker is required. Install Docker Engine or Docker Desktop (https://docs.docker.com/engine/install/) and re-run this script."
     exit 1
 }
 
+# The token is the only thing a new user has to keep: the image ships the
+# dashboard and the embedding weights, so nothing has to be fetched first.
 $envFile = Join-Path $root ".env"
 if (Test-Path $envFile) {
     Write-Host ".env already exists, keeping its MEMO_TOKEN"
@@ -18,17 +19,7 @@ if (Test-Path $envFile) {
     Write-Host ".env created with a generated MEMO_TOKEN"
 }
 
-$modelsDir = Join-Path $root "models"
-if (-not (Test-Path $modelsDir)) {
-    New-Item -ItemType Directory -Path $modelsDir | Out-Null
-}
-
-if (Get-ChildItem -Path $modelsDir -Recurse -File -ErrorAction SilentlyContinue) {
-    Write-Host "models/ already populated, skipping weights fetch"
-} else {
-    Write-Host "Fetching embedding weights into models/ with a temporary container (no local Python needed)"
-    docker run --rm -v "${modelsDir}:/models" -v "$(Join-Path $root 'scripts'):/scripts:ro" $image python /scripts/fetch_model.py
-}
-
+docker compose -f (Join-Path $root "docker-compose.user.yml") pull
 docker compose -f (Join-Path $root "docker-compose.user.yml") up -d
-Write-Host "memo is up. Health: http://localhost:5000/health"
+Write-Host "memo is up. Dashboard: http://localhost:8080/ui/   (paste the MEMO_TOKEN from .env)"
+Write-Host "Health:    http://localhost:8080/health"

@@ -10,3 +10,6 @@ models/
 build/
 *.egg-info/
 data/
+ui/node_modules/
+ui/dist/
+src/memo/static/ui/

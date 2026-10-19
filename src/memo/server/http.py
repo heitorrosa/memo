@@ -21,7 +21,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from memo import db
+from memo.server.api import api_app
 from memo.server.shared import VERSION
+from memo.server.static_ui import ui_routes
 
 
 JSON_ONLY: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -90,8 +92,14 @@ class BearerAuth:
         presented_query = (query.get("access_token") or [""])[0]
         return self.matches(presented_query, self.token)
 
+    @staticmethod
+    def is_public(path: str) -> bool:
+        # /health is the probe; /ui is the browser shell, which cannot attach a
+        # token to a document request and carries no data.
+        return path == "/health" or path == "/ui" or path.startswith("/ui/")
+
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") == "/health":
+        if scope["type"] != "http" or self.is_public(scope.get("path", "")):
             await self.app(scope, receive, send)
             return
         if not self.authorized(scope):
@@ -140,5 +148,7 @@ def build_http_app(server, token: str):
 
     app = Starlette(lifespan=lifespan,
                     routes=[Route("/health", health_check, methods=["GET"]),
+                            *ui_routes(),
+                            Mount("/api", app=api_app(server)),
                             Mount("/", app=mcp_app)])
     return BearerAuth(app, token)
