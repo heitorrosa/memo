@@ -17,6 +17,7 @@ FLOOR = 0.5
 CAP = 400
 ALIAS_DECLARER = "backfill:key"
 LINK_DECLARER = "backfill:similarity"
+LEGACY_DECLARER = "backfill:legacy"
 
 
 def slugify(text: str) -> str:
@@ -115,10 +116,77 @@ def plan_families(memories: list[dict]) -> list[tuple[str, str, str]]:
     return out
 
 
+def plan_prune(conn: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
+    prefixes = fetch(
+        conn,
+        "SELECT src_key, dst_key, rel, namespace FROM edges e"
+        " WHERE instr(e.src_key, '.') > 0"
+        " AND e.dst_key = substr(e.src_key, 1, instr(e.src_key, '.') - 1)"
+        " AND NOT EXISTS (SELECT 1 FROM memories m WHERE m.key = e.dst_key"
+        " AND m.namespace = e.namespace)")
+    dropped = {(row["src_key"], row["dst_key"], row["rel"], row["namespace"])
+               for row in prefixes}
+    missing = [
+        row for row in fetch(
+            conn,
+            "SELECT e.src_key, e.dst_key, e.rel, e.namespace, e.created_at"
+            " FROM edges e WHERE NOT EXISTS (SELECT 1 FROM edge_declarers d"
+            " WHERE d.src_key = e.src_key AND d.dst_key = e.dst_key"
+            " AND d.rel = e.rel AND d.namespace = e.namespace)")
+        if (row["src_key"], row["dst_key"], row["rel"], row["namespace"]) not in dropped
+    ]
+    return prefixes, missing
+
+
+def apply_prune(conn: sqlite3.Connection, prefixes: list[dict],
+                missing: list[dict]) -> None:
+    for row in prefixes:
+        conn.execute(
+            "DELETE FROM edge_declarers WHERE src_key=? AND dst_key=? AND rel=? AND namespace=?",
+            (row["src_key"], row["dst_key"], row["rel"], row["namespace"]))
+        conn.execute(
+            "DELETE FROM edges WHERE src_key=? AND dst_key=? AND rel=? AND namespace=?",
+            (row["src_key"], row["dst_key"], row["rel"], row["namespace"]))
+    for row in missing:
+        conn.execute(
+            "INSERT OR IGNORE INTO edge_declarers(src_key,dst_key,rel,namespace,declarers,"
+            "status,evidence,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
+            (row["src_key"], row["dst_key"], row["rel"], row["namespace"],
+             LEGACY_DECLARER, "candidate", 1, row["created_at"], row["created_at"]))
+    conn.commit()
+
+
+def run_prune(conn: sqlite3.Connection, path: Path, apply: bool) -> int:
+    prefixes, missing = plan_prune(conn)
+    edges_before = fetch(conn, "SELECT COUNT(*) AS n FROM edges")[0]["n"]
+    aliases_before = fetch(conn, "SELECT COUNT(*) AS n FROM aliases")[0]["n"]
+    print(f"db            {path}")
+    print(f"edges before  {edges_before}  aliases before {aliases_before}")
+    print(f"prefix edges  {len(prefixes)} to delete"
+          " (dst is the first segment of src and is not a memory key)")
+    print(f"declarers     {len(missing)} to add")
+    if not apply:
+        print("dry run: nothing written (pass --apply)")
+        for row in prefixes[:5]:
+            print(f"  drop   {row['namespace']}: {row['src_key']} -> {row['dst_key']}")
+        for row in missing[:5]:
+            print(f"  decl   {row['namespace']}: {row['src_key']} -> {row['dst_key']} ({row['rel']})")
+        return 0
+    apply_prune(conn, prefixes, missing)
+    edges_after = fetch(conn, "SELECT COUNT(*) AS n FROM edges")[0]["n"]
+    aliases_after = fetch(conn, "SELECT COUNT(*) AS n FROM aliases")[0]["n"]
+    print(f"applied: edges {edges_before} -> {edges_after}, aliases {aliases_before} -> {aliases_after}")
+    print(f"pruned {len(prefixes)} prefix edges, added {len(missing)} declarer rows")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db", help="path to memo.db (use a copy, or stop the container)")
     ap.add_argument("--apply", action="store_true", help="write; default is a dry run")
+    ap.add_argument("--prune", action="store_true",
+                    help="drop the edges whose dst is the first segment of the src and is not a "
+                         "memory key, and declare the rest")
     args = ap.parse_args()
 
     path = Path(args.db)
@@ -128,6 +196,12 @@ def main() -> int:
 
     conn = db_connect(str(path))
     conn.row_factory = sqlite3.Row
+
+    if args.prune:
+        code = run_prune(conn, path, args.apply)
+        conn.close()
+        return code
+
     memories = fetch(
         conn,
         "SELECT key, namespace, status, family_id, valid_from, embedding FROM memories",
