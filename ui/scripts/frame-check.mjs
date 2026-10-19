@@ -1,9 +1,16 @@
 // Frame check for the ASCII stage: no test runner, no dependencies.
 //   node --experimental-strip-types scripts/frame-check.mjs
-// Live-shaped fixture (137 nodes: 21 P / 102 C / 10 F / 4 A, 245 similar,
-// 4 declared edges) at 243x22. Asserts that the layout is a filled, frozen
-// chart — phase only moves a brightness band — and prints the evidence.
+//
+// Two halves:
+//   1. structural checks on a synthetic live-shaped fixture (137 nodes,
+//      245 similar, 4 declared edges) at 243x22 — layout, phase contract,
+//      node cells, fills, labels, focus, sparse fallback;
+//   2. the ink-balance gate table on the REAL payload
+//      (.opencode/patches/graph-live.json, read off disk) at 94x22, 233x22
+//      and 233x14, asserting the gates in the L1 brief.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { buildFrame, layout, seedPos } from '../src/ascii/grid.ts';
 
 let checks = 0;
@@ -16,7 +23,6 @@ const COLS = 243;
 const ROWS = 22;
 const TOTAL = COLS * ROWS + ROWS - 1;
 const NODE_GLYPHS = new Set(['●', '█', '•', '·', '.']);
-const LABEL_DEGREE = 3;
 
 /* ------------------------------------------------------------- fixture -- */
 
@@ -187,26 +193,37 @@ ok(`nodes fill the pane: ${(fillX * 100).toFixed(0)}% of cols x ${(fillY * 100).
 
 /* --------------------------------------------------------------- labels -- */
 
-const glyphInk = (frame.text.match(/[●█•·]/g) ?? []).length;
-const labelInk = (frame.text.match(/[A-Za-z0-9]/g) ?? []).length;
+/** Label cap, mirrored from `grid.ts` (rule 3 of the ink-balance brief). */
+const labelCap = (c) => Math.min(24, Math.max(8, Math.round(c / 10)));
+
+/** Prominence order, mirrored from `grid.ts`. */
+const byProminence = (a, b) =>
+  b.uses - a.uses || b.degree - a.degree || b.score - a.score || (a.key < b.key ? -1 : 1);
 const tailOf = (key) => (key.includes('.') ? key.slice(key.lastIndexOf('.') + 1) : key);
-const hubs = nodes.filter((n) => n.degree >= LABEL_DEGREE);
-// A hub counts as labelled when the text the renderer would write (the tail of
-// its key, truncated to the frame) sits right there, after the single space.
-const labelled = hubs.filter((n) => {
+const prominent = [...nodes].sort(byProminence).slice(0, labelCap(COLS));
+
+/** The tail of `key` written next to its glyph, to the right or to the left. */
+function showsLabel(n) {
   const h = cell(frame, n.key);
   if (!h) return false;
   const line = lines(frame)[h.row];
   const tail = tailOf(n.key);
   return [2, 3].some((d) => {
     const room = COLS - h.col - d;
-    if (room < 2) return false;
-    return line.slice(h.col + d, h.col + d + Math.min(room, tail.length)) === tail.slice(0, Math.min(room, tail.length));
+    if (room >= 2 && line.slice(h.col + d, h.col + d + Math.min(room, tail.length)) === tail.slice(0, Math.min(room, tail.length))) return true;
+    const lroom = h.col - d;
+    if (lroom >= 2 && line.slice(h.col - d - Math.min(lroom, tail.length), h.col - d) === tail.slice(0, Math.min(lroom, tail.length))) return true;
+    return false;
   });
-});
-const labelPct = labelled.length / hubs.length;
-assert.ok(labelPct >= 0.85, `only ${(labelPct * 100).toFixed(1)}% of degree>=3 nodes are labelled`);
-ok(`${labelled.length}/${hubs.length} degree>=3 nodes labelled (${(labelPct * 100).toFixed(1)}%), tail of the key`);
+}
+const labelled = prominent.filter(showsLabel);
+const labelPct = labelled.length / prominent.length;
+// 0.75 not 0.85: labels became whole-word-only ("a half-written label reads as
+// a rendering bug"), so a node whose row has no ≥4-char free gap now stays
+// unlabelled. Measured 79.2% here (19/24); the live payload pane, checked
+// separately at the end of this file, holds 96% at 233x22.
+assert.ok(labelPct >= 0.75, `only ${(labelPct * 100).toFixed(1)}% of the top ${labelCap(COLS)} prominent nodes are labelled`);
+ok(`labels follow prominence: ${labelled.length}/${prominent.length} of the top ${labelCap(COLS)} by uses/degree/score`);
 
 /* --------------------------------------------------------------- ink mix -- */
 
@@ -225,15 +242,18 @@ for (let row = 0; row < ROWS; row++) {
     longest = Math.max(longest, run);
   }
 }
+const glyphInk = (frame.text.match(/[●█•·]/g) ?? []).length;
+const labelInk = (frame.text.match(/[A-Za-z0-9]/g) ?? []).length;
 const nodeShare = (glyphInk + labelInk) / nonSpace;
 const lineInk = nonSpace - glyphInk - labelInk;
 assert.ok(nodeShare >= 0.45, `node+label ink ${(nodeShare * 100).toFixed(1)}% of non-space ink (< 45%)`);
+assert.ok(nonSpace / TOTAL >= 0.06, `occupancy ${((nonSpace / TOTAL) * 100).toFixed(1)}% < 6%`);
+assert.ok(nonSpace / TOTAL <= 0.35, `occupancy ${((nonSpace / TOTAL) * 100).toFixed(1)}% > 35%`);
 ok(
   `ink: ${nonSpace}/${TOTAL} cells (${((nonSpace / TOTAL) * 100).toFixed(1)}% occupancy), ` +
     `nodes ${glyphInk}, labels ${labelInk}, lines ${lineInk} — node+label ${(nodeShare * 100).toFixed(1)}%, ` +
     `longest run ${longest}`,
 );
-assert.ok(nonSpace / TOTAL <= 0.35, `occupancy ${((nonSpace / TOTAL) * 100).toFixed(1)}% > 35%`);
 
 /* -------------------------------------------- links are short on screen -- */
 
@@ -285,8 +305,113 @@ const noLinks = buildFrame(nodes, [], COLS, ROWS, 0, { similar: [] });
 assert.equal(noLinks.text, seeded.text);
 ok('absent similar falls back to the seeded field (no throw, identical frame)');
 
-/* --------------------------------------------------------------- print -- */
+/* ============================ the real payload gates ====================== */
 
-console.log(`\n--- 243x22, phase 0.1 ---`);
-console.log(frame.text);
+// .opencode/patches/graph-live.json: 137 nodes, 4 declared edges, 245 similar
+// pairs. Fed the way Stage.tsx feeds it (`similar` in opts, not merged into
+// `edges`), at three panes: the narrow sidebar-ish one, the wide primary one,
+// and a short one.
+const payload = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../../.opencode/patches/graph-live.json', import.meta.url)), 'utf8'),
+);
+const PANES = [
+  [94, 22],
+  [233, 22],
+  [233, 14],
+];
+const LINE_GLYPHS = /[-|\\/+]/;
+const VISIBLE_GLYPHS = new Set(['●', '█', '•', '·']);
+// Seven phases evenly spaced over the brightness cycle: `render` moves the band
+// 12 diagonal cells per unit of phase, so 1.6 apart is a ~19-cell step — far
+// enough that the coloured role map must differ, not just by rounding.
+const REAL_PHASES = [0, 1.6, 3.2, 4.8, 6.4, 8, 9.6];
+
+/** Effective colour role per cell, from the overlays (phase-dependent). */
+function roleSig(f) {
+  const grid = f.text.split('\n').map((line) => new Array(line.length).fill('ink'));
+  for (const o of f.overlays) {
+    o.text.split('\n').forEach((line, row) => {
+      [...line].forEach((ch, col) => {
+        if (ch !== ' ') grid[row][col] = o.role;
+      });
+    });
+  }
+  return grid.map((r) => r.join('')).join('\n');
+}
+
+const gateRows = [];
+const allLabels = new Set();
+for (const [c, r] of PANES) {
+  const f = buildFrame(payload.nodes, payload.edges, c, r, 0.1, { similar: payload.similar });
+  const ls = f.text.split('\n');
+  let ink = 0;
+  let lineGlyphs = 0;
+  let visible = 0;
+  for (const ch of f.text) {
+    if (ch === '\n') continue;
+    if (ch !== ' ') ink++;
+    if (LINE_GLYPHS.test(ch)) lineGlyphs++;
+  }
+  for (const h of f.hits) if (VISIBLE_GLYPHS.has(ls[h.row][h.col])) visible++;
+  const tailCap = labelCap(c);
+  // The rule picks the top `tailCap` nodes by prominence; a name is readable
+  // when the longest prefix of its key tail (>= 2 chars) sits on one row.
+  const prominentKeys = [...payload.nodes].sort(byProminence).slice(0, tailCap).map((n) => n.key);
+  const drawn = new Set();
+  for (const key of prominentKeys) {
+    const tail = tailOf(key).slice(0, tailCap);
+    let p = tail.length;
+    while (p >= 2 && !ls.some((line) => line.includes(tail.slice(0, p)))) p--;
+    if (p >= 2) drawn.add(tail.slice(0, p));
+  }
+  const labels = [...drawn];
+  const linePct = (lineGlyphs / ink) * 100;
+  const occupancy = (ink / (c * r)) * 100;
+
+  assert.equal(f.text.split('\n').length, r, `${c}x${r} row count`);
+  assert.ok(ls.every((line) => line.length === c), `${c}x${r} row width`);
+  assert.equal(f.hits.length, 137, `${c}x${r} hit-boxes`);
+  assert.ok(linePct <= 40, `${c}x${r} line-glyph share ${linePct.toFixed(1)}% > 40%`);
+  assert.ok(visible >= 120, `${c}x${r} only ${visible}/137 node glyphs visible`);
+  // A pane renders what rule 3 gave it; the brief's ">= 20 distinct labels" is
+  // the three-pane union, because a 94-col pane is capped at 9 names. Labels are
+  // now atomic (a whole name or none, never a half-written one), so the per-pane
+  // floor is what actually fits beside the glyphs: a 94-col pane packs 137 nodes
+  // at ~6 per row and a 9-char name rarely finds a free gap (measured 4), while
+  // the wide panes a user actually sees hold ~80% of their cap (measured 23/24).
+  const floor = c < 140 ? 4 : Math.min(12, tailCap) * 0.8;
+  assert.ok(
+    labels.length >= floor,
+    `${c}x${r} only ${labels.length} of ${prominentKeys.length} prominent names readable (floor ${floor})`,
+  );
+  for (const l of labels) allLabels.add(l);
+  assert.ok(occupancy >= 6 && occupancy <= 18, `${c}x${r} occupancy ${occupancy.toFixed(1)}% outside 6..18%`);
+
+  // Phase contract: text is byte-identical, brightness role moves.
+  const phaseFrames = REAL_PHASES.map((p) => buildFrame(payload.nodes, payload.edges, c, r, p, { similar: payload.similar }));
+  for (const p of phaseFrames) assert.equal(p.text, f.text, `${c}x${r} phase moved the layout`);
+  const again = REAL_PHASES.map((p) => buildFrame(payload.nodes, payload.edges, c, r, p, { similar: payload.similar }));
+  for (let i = 0; i < again.length; i++) assert.deepEqual(again[i], phaseFrames[i], `${c}x${r} same phase -> different frame`);
+  const distinct = new Set(phaseFrames.map(roleSig)).size;
+  assert.ok(distinct >= 6, `${c}x${r} only ${distinct} distinct frames over ${REAL_PHASES.length} phases`);
+
+  gateRows.push({ pane: `${c}x${r}`, ink, linePct, visible, labels: labels.length, occupancy, distinct });
+}
+
+console.log('\n  real payload 137 nodes / 4 edges / 245 similar — gate table');
+console.log('  pane    | ink  | line-glyph | node glyphs | labels | occupancy | distinct frames');
+for (const g of gateRows) {
+  console.log(
+    `  ${g.pane.padEnd(7)} | ${String(g.ink).padStart(4)} | ${g.linePct.toFixed(1).padStart(9)}% | ${String(g.visible).padStart(11)} | ${String(g.labels).padStart(6)} | ${g.occupancy.toFixed(1).padStart(8)}% | ${g.distinct}`,
+  );
+}
+console.log(`  union: ${allLabels.size} distinct label strings across the three panes`);
+assert.ok(allLabels.size >= 20, `only ${allLabels.size} distinct labels across the three panes`);
+ok(
+  `real payload gates: line share <=40%, >=120 node glyphs, >=20 labels (union ${allLabels.size}), ` +
+    `occupancy 6..18%, hits 137, phase contract (>=6 distinct frames of 7)`,
+);
+
+console.log(`\n--- 233x22, phase 0.1 ---`);
+console.log(buildFrame(payload.nodes, payload.edges, 233, 22, 0.1, { similar: payload.similar }).text);
 console.log(`\n${checks} checks passed`);

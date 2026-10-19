@@ -94,22 +94,37 @@ const REL_ROLE: Record<string, Role> = {
 const MAX_NODES = 200;
 /** Shortest drawn segment worth reading, in cells. */
 const MIN_EDGE_LEN = 3;
-/**
- * A line longer than the row height x 2.5 crosses most of the frame and reads
- * as noise, so it is dropped. Similarity strands also step 2 cells, which
- * keeps them subordinate to the declared edges and the node glyphs.
- */
-const LINE_RATIO = 2.5;
+/** Similarity strands step 2 cells, so they stay subordinate to the glyphs. */
 const SIMILAR_STEP = 2;
 /**
- * Similarity strands are local texture: each node keeps at most its top-2
- * links by score (undirected pairs count once).
+ * One pane-relative strand budget: at most 6% of the cells (233x22 -> 307).
+ * Candidates are consumed strongest-first — declared edges, then similarity
+ * pairs in score order, each undirected pair once — and the budget is never
+ * exceeded. That is what keeps line ink a bounded minority of the picture.
  */
-const SIMILAR_PER_NODE = 2;
+const STRAND_RATIO = 0.06;
+
+/** Longest readable strand, in cells: no strand runs the width of a wide pane. */
+function strandMax(cols: number, rows: number): number {
+  return Math.max(rows, cols / 6);
+}
+
+/**
+ * Longest label, in cells: a handle, not a sentence. One tenth of the width,
+ * the same scale as the label count, but never taller than the pane — a short
+ * pane gets short names instead of a crowded one.
+ */
+function labelMax(cols: number, rows: number): number {
+  return clampInt(Math.round(Math.min(cols / 10, rows * 1.1)), 6, 24);
+}
+
+/** Labels per pane, by prominence (uses, then degree, then score). */
+function labelCount(cols: number): number {
+  return clampInt(Math.round(cols / 10), 8, 24);
+}
+
 /** Width either side of the brightness band, in diagonal cells. */
 const BAND_HALF = 10;
-/** Labels: hubs only, highest degree first, whole-or-nothing. */
-const LABEL_DEGREE = 3;
 
 /** Glyphs a line writes; a second line hitting one of them makes a `+`. */
 const LINE_GLYPHS = '-|/\\+';
@@ -498,10 +513,14 @@ function nodeRole(n: AsciiNode): Role {
 
 /**
  * Degree-sized glyph: a hub is obvious before any line is read.
- * Hubs (degree >= 4) are a 2x2 block of `█`, drawn by `drawNodes`.
+ * Degree counts similarity links as well as declared edges (see `linked` in
+ * buildFrame); the measured live histogram is 0:10 1:11 2:9 3:46 4:30 5:10
+ * 6:6 7:5 8:3 9:3 10+:4, so the dot tier starts at 3 - the median node is
+ * linked, and only the isolated tenth stays a speck. Hubs (degree >= 6, 21
+ * nodes live) are a 2x2 block of `█`, drawn by `drawNodes`.
  */
 function nodeGlyph(n: AsciiNode): string {
-  if (n.degree >= 2) return '●';
+  if (n.degree >= 3) return '●';
   if (n.degree >= 1) return '•';
   return '·';
 }
@@ -512,13 +531,32 @@ function labelOf(key: string): string {
   return dot >= 0 && dot < key.length - 1 ? key.slice(dot + 1) : key;
 }
 
+/**
+ * Shortest readable name for a key that fits `cap`. Never cut mid-word: the key
+ * tail when it fits, else the tail cut at its last '-' or ' ' boundary inside
+ * the cap ("frontend-stack-motion" -> "frontend"), else its last word. Null
+ * when nothing worth reading fits, so the node stays unlabelled instead of
+ * showing a chopped stub.
+ */
+function labelFor(key: string, cap: number): string | null {
+  const tail = labelOf(key);
+  if (tail.length <= cap) return tail;
+  const head = tail.slice(0, cap);
+  const cut = Math.max(head.lastIndexOf("-"), head.lastIndexOf(" "));
+  if (cut >= 4) return head.slice(0, cut);
+  const word = tail.split(/[-\s]+/).pop() ?? "";
+  return word.length >= 4 && word.length <= cap ? word : null;
+}
+
 // --- drawing ---------------------------------------------------------------
 
 /**
  * Straight segment: one glyph per step, horizontal `-`, vertical `|`, diagonal
- * `/` `\`, and `+` where the cell already holds a line. Returns cells inked.
+ * `/` `\`, and `+` where the cell already holds a line. Stops as soon as
+ * `max` cells are inked, so a caller's budget is never exceeded. Returns cells
+ * inked.
  */
-function drawLine(buf: CellBuf, a: Projected, b: Projected, role: Role, step: number): number {
+function drawLine(buf: CellBuf, a: Projected, b: Projected, role: Role, step: number, max = Infinity): number {
   const dx = b.col - a.col;
   const dy = b.row - a.row;
   const len = Math.max(Math.abs(dx), Math.abs(dy));
@@ -527,6 +565,7 @@ function drawLine(buf: CellBuf, a: Projected, b: Projected, role: Role, step: nu
   let pc = a.col;
   let pr = a.row;
   for (let i = 1; i < len; i += step) {
+    if (written >= max) break;
     const t = i / len;
     const col = Math.round(a.col + dx * t);
     const row = Math.round(a.row + dy * t);
@@ -648,9 +687,29 @@ export function buildFrame(
 
   const selected = selectNodes(nodes);
   const synthetic = selected.length === 0;
-  const list = synthetic ? synthField() : selected;
-  const present = new Set(list.map((n) => n.key));
   const similar = synthetic ? [] : (opts.similar ?? []);
+
+  // Connectivity counts the similarity links, not just the declared edges. The
+  // live data has 4 declared edges against 245 similarity pairs, so a
+  // degree-from-edges rule left 128 of 137 nodes at degree 0: every node drew
+  // as faint dust and the pane read as a lattice. Measured histogram with both
+  // counted: 0:10 1:11 2:9 3:46 4:30 5:10 6:6 7:5 8:3 9:3 10+:4.
+  const linked = new Map<string, number>();
+  if (!synthetic) {
+    for (const e of edges) {
+      linked.set(e.src_key, (linked.get(e.src_key) ?? 0) + 1);
+      linked.set(e.dst_key, (linked.get(e.dst_key) ?? 0) + 1);
+    }
+    for (const s of similar) {
+      linked.set(s.src_key, (linked.get(s.src_key) ?? 0) + 1);
+      linked.set(s.dst_key, (linked.get(s.dst_key) ?? 0) + 1);
+    }
+  }
+  const list = (synthetic ? synthField() : selected).map((n) => ({
+    ...n,
+    degree: n.degree + (linked.get(n.key) ?? 0),
+  }));
+  const present = new Set(list.map((n) => n.key));
 
   const lights = new Set<string>();
   if (!synthetic && opts.focus && present.has(opts.focus)) {
@@ -694,11 +753,11 @@ export function buildFrame(
   };
 
   type Strand = { a: Projected; b: Projected; len: number };
-  /** A line across the frame is a scratch, shorter than 3 cells is noise. */
-  const maxLen = rows * LINE_RATIO;
-  const fits = (s: { len: number }, max = maxLen) => s.len >= MIN_EDGE_LEN && s.len <= max;
+  /** Length filter is pane-relative: no strand runs the width of the pane. */
+  const maxLen = strandMax(cols, rows);
+  const fits = (s: { len: number }) => s.len >= MIN_EDGE_LEN && s.len <= maxLen;
 
-  // Declared edges that survive selection and focus, long enough to read.
+  // Declared edges that survive selection, focus and the length filter.
   const edgeStrands: (Strand & { role: Role })[] = edges
     .filter((e) => present.has(e.src_key) && present.has(e.dst_key))
     .filter((e) => near(e.src_key) && near(e.dst_key))
@@ -708,12 +767,10 @@ export function buildFrame(
     })
     .filter((s): s is Strand & { role: Role } => s !== null && fits(s));
 
-  // Similarity pass: ranked by score, undirected pairs count once, each node
-  // keeps at most its top-2, and only local, short strands survive.
+  // Similarity candidates: strongest first, each undirected pair counted once.
   const linkStrands: Strand[] = [];
   {
     const seen = new Set<string>();
-    const perNode = new Map<string, number>();
     const ranked = [...similar]
       .filter((l) => present.has(l.src_key) && present.has(l.dst_key))
       .filter((l) => near(l.src_key) && near(l.dst_key))
@@ -721,86 +778,95 @@ export function buildFrame(
     for (const l of ranked) {
       const pair = l.src_key < l.dst_key ? `${l.src_key}>${l.dst_key}` : `${l.dst_key}>${l.src_key}`;
       if (seen.has(pair)) continue;
-      if ((perNode.get(l.src_key) ?? 0) >= SIMILAR_PER_NODE) continue;
-      if ((perNode.get(l.dst_key) ?? 0) >= SIMILAR_PER_NODE) continue;
       const s = strand(l.src_key, l.dst_key);
-      if (!s || !fits(s, rows)) continue; // only genuinely local pairs
+      if (!s || !fits(s)) continue;
       seen.add(pair);
-      perNode.set(l.src_key, (perNode.get(l.src_key) ?? 0) + 1);
-      perNode.set(l.dst_key, (perNode.get(l.dst_key) ?? 0) + 1);
       linkStrands.push(s);
     }
   }
 
   // `sparse` is honest: the backdrop only appears when nothing at all survives.
   const sparse = edgeStrands.length === 0 && linkStrands.length === 0;
-  if (sparse) drawBackdrop(buf, cols, rows);
 
-  // Ink hierarchy: lines first, so a node or a label always wins the cell.
-  for (const s of linkStrands) drawLine(buf, s.a, s.b, 'faint', SIMILAR_STEP);
-  for (const s of edgeStrands) drawLine(buf, s.a, s.b, s.role, 1);
-
-  // Nodes: a hub is a 2x2 block (all four cells claimed, else a single `●`),
-  // everybody else one glyph sized by degree. Node cells never collide.
+  // Node visibility first: every node cell (and a hub's whole 2x2 block) is
+  // claimed before any strand, so line ink can never take a node off the pane.
+  // `body` writes the glyph over the claim.
+  const isHub = (n: AsciiNode): boolean => n.degree >= 6;
   const occupied = new Set<number>();
-  const isHub = (n: AsciiNode): boolean => n.degree >= 4;
+  const body = new Map<string, [number, number][]>();
   for (const { n, p } of ordered) {
-    const lit = near(n.key);
-    const ch = lit ? nodeGlyph(n) : '.';
-    const role = lit ? nodeRole(n) : 'faint';
-    let block = false;
-    if (lit && isHub(n) && p.col + 1 < cols && p.row + 1 < rows) {
-      block = true;
-      for (const [dc, dr] of [
+    const cells: [number, number][] = [[p.col, p.row]];
+    if (near(n.key) && isHub(n) && p.col + 1 < cols && p.row + 1 < rows) {
+      const blk: [number, number][] = [
         [1, 0],
         [0, 1],
         [1, 1],
-      ]) {
-        if (occupied.has((p.row + dr) * cols + p.col + dc)) {
-          block = false;
-          break;
-        }
+      ];
+      if (blk.every(([dc, dr]) => !occupied.has((p.row + dr) * cols + p.col + dc))) {
+        cells.push([p.col + 1, p.row], [p.col, p.row + 1], [p.col + 1, p.row + 1]);
       }
     }
-    if (block) {
-      for (const [dc, dr] of [
-        [0, 0],
-        [1, 0],
-        [0, 1],
-        [1, 1],
-      ]) {
-        buf.set(p.col + dc, p.row + dr, '█', role);
-        occupied.add((p.row + dr) * cols + p.col + dc);
-      }
-    } else {
-      buf.set(p.col, p.row, ch, role);
-      occupied.add(p.row * cols + p.col);
-    }
+    for (const [c, r] of cells) occupied.add(r * cols + c);
+    body.set(n.key, cells);
+  }
+  for (const cells of body.values()) {
+    for (const [c, r] of cells) buf.claim(c, r, ' ', 'ink');
   }
 
-  // Labels on hubs: one row, one space to the right of the glyph, faint so
-  // they never compete with the dots. A label is claimed whole or skipped
-  // whole — no half words.
-  const hubs = ordered
-    .filter(({ n }) => n.degree >= LABEL_DEGREE && near(n.key))
-    .sort((a, b) => b.n.degree - a.n.degree || (a.n.key < b.n.key ? -1 : 1));
-  for (const { n, p } of hubs) {
-    const start = p.col + (isHub(n) ? 3 : 2);
-    const room = cols - start;
-    if (room < 2) continue;
-    const text = labelOf(n.key).slice(0, room);
-    if (!text) continue;
-    let ok = true;
-    for (let i = 0; i < text.length; i++) {
-      const i2 = p.row * cols + start + i;
-      if (occupied.has(i2)) {
-        ok = false;
-        break;
-      }
+  if (sparse) drawBackdrop(buf, cols, rows);
+
+  // Strand ink: strongest first, from one pane-relative budget. Declared edges
+  // lead, then similarity pairs in score order; the budget is never exceeded.
+  const budget = Math.floor(STRAND_RATIO * cols * rows);
+  let spent = 0;
+  for (const s of edgeStrands) spent += drawLine(buf, s.a, s.b, s.role, 1, budget - spent);
+  for (const s of linkStrands) spent += drawLine(buf, s.a, s.b, 'faint', SIMILAR_STEP, budget - spent);
+
+  // Nodes: the claimed cells become the glyph (2x2 block for a hub).
+  for (const { n } of ordered) {
+    const lit = near(n.key);
+    const cells = body.get(n.key)!;
+    const role = lit ? nodeRole(n) : 'faint';
+    const glyph = cells.length === 4 ? '█' : lit ? nodeGlyph(n) : '.';
+    for (const [c, r] of cells) buf.set(c, r, glyph, role);
+  }
+
+  // Labels by prominence (uses, then degree, then score), not by degree: the
+  // busiest memories are the ones worth naming. Faint, one row, one space off
+  // the glyph, and it takes the side of the node with more room — a crowded row
+  // usually has space on one side. It never lands on a glyph (node cells are
+  // occupied) and nothing writes after it, so it cannot be overwritten.
+  const labelLen = labelMax(cols, rows);
+  /** Longest prefix of `text` that fits on the row, `gap` cells off the glyph, going `dir`. */
+  const labelFit = (text: string, p: Projected, gap: number, dir: number): number => {
+    let len = 0;
+    while (len < text.length) {
+      const col = dir > 0 ? p.col + gap + len : p.col - gap - (len + 1);
+      if (col < 0 || col >= cols || occupied.has(p.row * cols + col)) break;
+      len++;
     }
-    if (!ok) continue;
-    if (!occupied.has(p.row * cols + start - 1)) buf.set(start - 1, p.row, ' ', 'faint');
-    for (let i = 0; i < text.length; i++) {
+    return len;
+  };
+  const labelled = list
+    .filter((n) => near(n.key))
+    .sort((a, b) => b.uses - a.uses || b.degree - a.degree || b.score - a.score || (a.key < b.key ? -1 : 1))
+    .slice(0, labelCount(cols));
+  for (const n of labelled) {
+    const p = pos.get(n.key)!;
+    const gap = isHub(n) ? 3 : 2;
+    // Atomic: a whole label or none. A half-written one ("Educati") reads as a
+    // rendering bug; a shorter complete word still reads.
+    const text = labelFor(n.key, labelLen);
+    if (!text) continue;
+    const l = labelFit(text, p, gap, -1);
+    const r = labelFit(text, p, gap, 1);
+    if (Math.max(l, r) < text.length) continue;
+    const fromLeft = l > r;
+    const len = text.length;
+    const start = fromLeft ? p.col - gap - len : p.col + gap;
+    const sep = fromLeft ? start + len : start - 1;
+    if (sep >= 0 && sep < cols && !occupied.has(p.row * cols + sep)) buf.set(sep, p.row, ' ', 'faint');
+    for (let i = 0; i < len; i++) {
       buf.set(start + i, p.row, text[i], 'faint');
       occupied.add(p.row * cols + start + i);
     }

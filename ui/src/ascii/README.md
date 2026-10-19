@@ -42,7 +42,7 @@ Change the mask and both follow — nothing is hand-copied per size.
 
 ## How it draws
 
-`buildFrame` returns `{ text, overlays, hits, dim }`.
+`buildFrame` returns `{ text, overlays, hits, dim, sparse }`.
 `text` is the **entire** grid, written into one `<pre>` with `textContent` —
 never a React node per cell. `overlays` are same-size layers holding only the
 cells of one colour role (spaces elsewhere); each is written into its own
@@ -54,16 +54,22 @@ the invisible focusable hit-boxes when `onSelect` is passed.
   a hub (degree ≥ 4) is a 2x2 block of `█` if all four cells are free, else `●`;
   degree 2-3 is `●`, degree 1 is `•`, degree 0 is `·`. Superseded and
   out-of-focus nodes drop to a faint `.`. A hub is obvious from three metres.
-- **Labels on hubs** (degree ≥ 3), in `faint`, one row, one space to the right
-  of the glyph: the tail of the key after the last dot, truncated to the frame.
-  A label is claimed whole or skipped whole — and only against node cells, so
-  labels never overwrite a glyph but do win over a strand.
+- **Labels by prominence**, not by degree: the top `clamp(cols / 10, 8, 24)`
+  nodes by (`uses`, then `degree`, then `score`) get the tail of their key after
+  the last dot, in `faint`, on one row, one space off the glyph, truncated to
+  `labelMax` cells. A label takes whichever side of the glyph has room, never
+  lands on a glyph or another label, and is dropped if it cannot keep 2 cells.
+  The busiest memories get named, which is what a reader is looking for.
 - Declared edges: `-` `|` `/` `\` by slope, in the relation's role colour,
-  dashed at `+` where they cross. Similarity strands: dotted (step 2) `-` in
-  faint, at most 2 per node and only between nodes closer than `rows` cells.
+  dashed at `+` where they cross. Similarity strands: dotted (every 2nd cell) in
+  `faint`, strongest pair first, each undirected pair counted once.
 - Drawing order: any backdrop, then declared edges, then similar strands, then
-  nodes, then labels. Agency is explicit in that order: a dot always wins the
-  cell, and a label only ever loses to a dot.
+  nodes, then labels. Agency is explicit in that order: every node cell is
+  claimed before any strand, so strand ink can never overwrite a glyph; a label
+  only ever loses to a glyph. An isolated node (degree 0) is a `·` on its own
+  claimed cell — that cell is its halo: at these densities a wider halo (137
+  nodes x 5 cells) would eat the whole 6..18% occupancy budget, and the claimed
+  cell already keeps strands off it.
 
 ### Where nodes sit
 
@@ -81,22 +87,47 @@ per-axis min/max fit to `[1, cols-2] x [0, rows-1]`, which is what fills the
 frame instead of leaving a centred ellipse with dead margins. An axis where
 every node sits on one line is centred rather than stretched.
 
-Two calibrations keep a 243x22 frame readable (fixture: 137 nodes, 245
-block-local links, 4 declared edges):
+Three pane-relative rules bound the ink. They are calibrated on the real
+`/api/graph` payload (137 nodes, 4 declared edges, 245 `similar` pairs): before
+them the picture was 87% line glyphs and read as a lattice.
 
-- `SIMILAR_PER_NODE` (2): every node keeps at most its top-2 links by score
-  (undirected pairs count once), so at most ~n strands exist no matter how many
-  links the server sends.
-- `LINE_RATIO` (2.5) for declared edges, `rows` for similarity: a strand longer
-  than that crosses the frame and reads as noise. Links are local by construction,
-  so the mean linked span stays far below the mean span of an arbitrary pair
-  (frame-check: 12 cells vs 73).
+- `STRAND_RATIO` (0.06): a strand budget of at most 6% of `cols x rows` cells —
+  307 cells at 233x22. Declared edges draw first, then `similar` pairs in score
+  order (each undirected pair once); drawing stops the moment the budget is
+  gone. Never exceeded.
+- `strandMax(cols, rows)` = `max(rows, cols / 6)`: a strand longer than that is
+  dropped, so nothing runs the width of a wide pane. Links are local by
+  construction, so the mean linked span stays far below the mean span of
+  an arbitrary pair (frame-check: 12 cells vs 73 on the fixture).
+- `labelCount(cols)` = `clamp(cols / 10, 8, 24)` names, each up to
+  `labelMax(cols, rows)` = `clamp(round(min(cols / 10, rows * 1.1)), 6, 24)`
+  cells: a wide pane gets more and longer names, a narrow one stays sparse.
 
 The layout is a **frozen chart**: `phase` (the 5th argument, named for the
 signature it kept) drives only the brightness band, `layout()` never re-runs
 per frame, and nothing is re-centred per redraw. No `Math.random`, no time
-input: `frame-check` diffs the frame between phases and expects 0 changed
-cells.
+input: at any pane the `text` is byte-identical across phases, the coloured
+role map differs, and `frame-check` asserts both.
+
+### The gates (`scripts/frame-check.mjs`)
+
+`npm run check:frame` runs the structural checks on a synthetic live-shaped
+fixture at 243x22 **and** the ink-balance gate table on the real payload
+`.opencode/patches/graph-live.json` (137 nodes / 4 edges / 245 pairs) at
+94x22, 233x22 and 233x14:
+
+| pane   | ink | line glyphs | node glyphs | names readable | occupancy | distinct frames / 7 |
+|--------|-----|-------------|-------------|----------------|-----------|---------------------|
+| 94x22  | 280 | 32.9%       | 137/137     | 9 of 9         | 13.5%     | 7                   |
+| 233x22 | 695 | 38.8%       | 137/137     | 23 of 24       | 13.6%     | 7                   |
+| 233x14 | 529 | 31.9%       | 137/137     | 22 of 24       | 16.2%     | 7                   |
+
+Asserted per pane: line-glyph share ≤ 40% of ink, ≥ 120 node glyphs visible,
+`hits.length === 137`, occupancy 6..18% of cells, same phase → identical frame,
+and ≥ 6 distinct frames over 7 phases (band moves). Across the three panes: ≥ 20
+distinct label strings (50 measured) — a 94-col pane is capped at 9 names by
+`labelCount`, so 20 is a union, not a per-pane, count. The baseline was 87% /
+75% / 83% line glyphs.
 
 ### The animation
 
@@ -115,20 +146,19 @@ memory, and what it is close to".
 
 ### Three rules that keep it legible
 
-1. **Strands are rare and short.** Candidate `similar` pairs are ranked by
-   score, deduped undirected, and capped at 2 per node (`SIMILAR_PER_NODE`); a
-   strand must be shorter than `rows` cells, a declared edge than
-   `LINE_RATIO x rows`. The length caps and the per-node tally are what bound
-   the ink — no shared cell budget.
-2. **Occupy-once, then dots win.** Lines claim cells first-come-first-served;
-   nodes are written after them, then labels. A label must own every cell it
-   touches, so a hub next to another node simply goes unlabelled (frame-check:
-   111/128 at 243x22). Node cells are de-duplicated: a node that lands on a
-   taken cell walks a spiral of up to 3 rings to the nearest free one, so a
-   cluster never hides a node, and `hits` stays unique per key.
-3. **Ink hierarchy.** Lines ~40% of the ink, nodes and labels ≥ 45% (measured
-   57% on the fixture), labels in `faint` so they never compete with the dots
-   they describe.
+1. **Strands are rare and short.** One pane-relative budget (`STRAND_RATIO`)
+   caps the strand cells; a pane-relative length filter (`strandMax`) drops any
+   strand that would cross the frame; similarity candidates are ranked by score
+   and deduped undirected. On the live payload that is 92 / 270 / 169 line cells
+   at 94x22 / 233x22 / 233x14.
+2. **Nodes first, then labels.** Node cells are claimed before any strand, so a
+   node glyph is never overwritten by line ink. Node cells are de-duplicated: a
+   node that lands on a taken cell walks a spiral of up to 3 rings to the nearest
+   free one, so a cluster never hides a node, and `hits` stays unique per key.
+3. **Ink hierarchy.** Nodes and labels are the dominant ink — 66.8% / 61.0% /
+   67.7% at 94x22 / 233x22 / 233x14, against 32.9% / 38.8% / 31.9% for line
+   glyphs (was 87% lines). Labels stay in `faint` so they never compete with the
+   dots they describe.
 
 ## Degrading honestly
 
