@@ -8,8 +8,6 @@ import numpy as np
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_CACHE = "/models"
-# The image bakes the weights into /opt/memo/models, so a plain `docker run`
-# needs no mount; a /models bind mount still wins when it is present.
 BAKED_CACHE = "/opt/memo/models"
 DIM = 384
 

@@ -94,8 +94,6 @@ class BearerAuth:
 
     @staticmethod
     def is_public(path: str) -> bool:
-        # /health is the probe; /ui is the browser shell, which cannot attach a
-        # token to a document request and carries no data.
         return path == "/health" or path == "/ui" or path.startswith("/ui/")
 
     async def __call__(self, scope, receive, send):

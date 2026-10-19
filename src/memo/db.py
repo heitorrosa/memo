@@ -6,7 +6,7 @@ from peewee import SqliteDatabase
 from playhouse.migrate import SqliteMigrator
 
 from memo.models import orm as orm_models
-from memo.models.orm import render_schema as _render
+from memo.models.orm import render_schema
 from memo.models.orm import database as peewee_database
 
 MEMO_SCHEMA_VERSION = 3
@@ -178,8 +178,6 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     if HAS_VEC:
         try:
-            import sqlite_vec
-
             sqlite_vec.load(conn)
         except Exception:
             pass
@@ -202,7 +200,7 @@ def migrate(conn: sqlite3.Connection) -> int:
         ensure_namespaces(conn)
     else:
         with conn:
-            conn.executescript(_render())
+            conn.executescript(render_schema())
             ensure_memory_columns(conn)
             ensure_edges(conn)
             ensure_aliases(conn)

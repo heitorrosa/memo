@@ -1,10 +1,3 @@
-"""Static mount for the built dashboard (contract §3).
-
-Resolution order: ``MEMO_UI_DIR`` env, then ``<memo package>/static/ui``, then
-``<cwd>/src/memo/static/ui``. When none holds an ``index.html`` the mount
-answers 404 with a plain-text hint instead of a stack trace.
-"""
-
 from __future__ import annotations
 
 import os
@@ -31,7 +24,7 @@ def ui_dir() -> Path | None:
     return None
 
 
-class _NotBuilt:
+class NotBuilt:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return
@@ -43,15 +36,7 @@ class _NotBuilt:
         await send({"type": "http.response.body", "body": body})
 
 
-class _UiCache:
-    """Cache policy for the built dashboard.
-
-    Starlette's StaticFiles sets no cache headers at all, so a browser happily
-    reuses a cached ``index.html`` and keeps running the previous bundle after
-    a rebuild - which reads as "the ui is not updated". HTML revalidates on
-    every load; content-hashed assets are immutable.
-    """
-
+class UiCache:
     def __init__(self, app):
         self.app = app
 
@@ -74,14 +59,13 @@ class _UiCache:
 def ui_mount() -> Mount:
     directory = ui_dir()
     app = (StaticFiles(directory=str(directory), html=True)
-           if directory else _NotBuilt())
-    return Mount("/ui", app=_UiCache(app))
+           if directory else NotBuilt())
+    return Mount("/ui", app=UiCache(app))
 
 
-async def _root(request):
+async def root(request):
     return RedirectResponse("/ui/", status_code=307)
 
 
 def ui_routes() -> list:
-    """``/ui`` itself is a bare redirect: a Mount only matches ``/ui/...``."""
-    return [Route("/ui", _root), ui_mount()]
+    return [Route("/ui", root), ui_mount()]

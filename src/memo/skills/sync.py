@@ -116,15 +116,15 @@ def prune_stale_agents(conn: sqlite3.Connection, now_iso: str) -> None:
 def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
                 offset: int, limit: int | None) -> dict:
     live = live_rows(conn)
-    by_name = {name: (description, body, body_hash, version) for name, description, body, body_hash, version in live}
+    live_names = {row[0] for row in live}
     tombstoned_names = tombstoned(conn)
-    all_names = set(by_name) | tombstoned_names
+    all_names = live_names | tombstoned_names
     if known is None:
         writes = [
             {"path": f"skills/{name}/SKILL.md",
              "content": build_frontmatter(name, description, version, body),
              "hash": hash_body_normalized(body)}
-            for name, description, body, body_hash, version in live
+            for name, description, body, _, version in live
         ]
         deletes: list[dict] = []
     else:
@@ -133,7 +133,7 @@ def sync_files(conn: sqlite3.Connection, known: list[dict] | None,
             if isinstance(entry.get("name"), str) and isinstance(entry.get("hash"), str)
         }
         writes = []
-        for name, description, body, body_hash, version in live:
+        for name, description, body, _, version in live:
             compare_hash = hash_body_normalized(body)
             if have.get(name) != compare_hash:
                 writes.append({

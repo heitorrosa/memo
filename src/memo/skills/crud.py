@@ -84,8 +84,6 @@ def put(conn: sqlite3.Connection, name: str, description: str, body: str,
 def split_revisions(body: str) -> tuple[str, list[str]]:
     chunks, current = [], []
     for line in body.split("\n"):
-        if line.startswith("## Revision v") and (not current or current == [""]):
-            pass
         if line.startswith("## Revision v"):
             chunks.append("\n".join(current).rstrip("\n"))
             current = [line]

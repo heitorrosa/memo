@@ -29,13 +29,6 @@ CANDIDATE_COLUMNS = (
 
 
 def eligible(row: dict, query_time, known, include_superseded: bool) -> bool:
-    """Retrieval eligibility shared by the initial scan and graph expansion.
-
-    Default (include_superseded=False) admits only rows that are current and
-    inside their validity window at query_time, so superseded rows are excluded
-    everywhere. include_superseded=True admits started, non-expired rows
-    (current or superseded). A row created after as_known_at is never eligible.
-    """
     if known is not None:
         try:
             if temporal.parse_ts(row["created_at"]) > known:
@@ -58,14 +51,6 @@ def eligible(row: dict, query_time, known, include_superseded: bool) -> bool:
 
 
 def candidate_rows(conn: sqlite3.Connection, namespace: str, fts_hits: dict) -> list:
-    """Bounded, deterministic candidate pool for the initial scan.
-
-    Order: FTS text matches first (relevance), then rowid ascending (insertion
-    order) as the tail. Relevance, not recency, decides which rows survive the
-    bound, so an old or historically-valid row that matches the query text is
-    never starved by unrelated filler; the rowid tail keeps the scan bounded and
-    reproducible for vector-only matches.
-    """
     if not fts_hits:
         return conn.execute(
             f"SELECT {CANDIDATE_COLUMNS} FROM memories WHERE namespace=?"
@@ -149,7 +134,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
 
     now = temporal.parse_ts(temporal.now_iso())
     scored = []
-    for row_id, key, value, kind, embedding, stability, score, uses, created_at, updated_at, valid_from, valid_to, valid_until, status, family_id in id_rows:
+    for row_id, key, value, kind, embedding, stability, _, uses, created_at, updated_at, valid_from, valid_to, valid_until, status, _ in id_rows:
         row = {"key": key, "value": value, "type": kind, "embedding": embedding,
                "created_at": created_at, "status": status,
                "valid_from": valid_from, "valid_to": valid_to,
