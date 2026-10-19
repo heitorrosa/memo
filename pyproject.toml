@@ -27,9 +27,6 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Non-.py runtime data: prompts.py loads prompts.json from its own package dir,
-# so the wheel must carry it (otherwise FileNotFoundError in the container,
-# where only the installed package exists).
 [tool.setuptools.package-data]
 memo = ["prompts.json"]
 

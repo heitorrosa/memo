@@ -1,22 +1,3 @@
-// opencode-memo plugin manifest + hook registration (Bun, zero deps).
-// Talks to memo ONLY over its MCP endpoint — never opens the DB file (M-032).
-// Config (env, with defaults): MEMO_ENDPOINT (default
-// http://localhost:8000/mcp), MEMO_TOKEN (required for --http).
-//
-// No background scheduling, no idle flush, no polling (M-030):
-//   0. tool transform        — registers the harness-side skill_create tool
-//                               (writes SKILL.md locally, then auto-pushes)
-//   1. session "context"      — frozen orientation block, byte-stable per
-//                               session, re-pushed on EVERY render so it
-//                               survives compaction; plus any reminder queued by (2)
-//   2. tool "execute.before"  — reminder guards: records memory_search/skill_put
-//                               use; queues a reminder when the agent acts
-//                               without them; fires a non-blocking drift check
-//                               on skill use (never blocks, never mutates input)
-//   3. session "compaction"   — carries the memory block through compaction
-//   4. tool "execute.after"   — disk-evident skill push: a **/SKILL.md write or
-//                               a native skill_create/skill_update event pushes
-//                               the skill via skill_put (restored from 216a806)
 import { Plugin } from "@opencode/plugin";
 import {
   transform, onSessionStart, onAfterWrite, createGuard, guardBefore,
@@ -26,7 +7,6 @@ import {
 export const name = "opencode-memo";
 export const version = "3.0.0";
 
-// Named re-exports stay for tests/consumers that import hooks directly.
 export { transform, onSessionStart, onAfterWrite, guardBefore, createSkillCreateTool };
 
 export const config = {
@@ -39,11 +19,9 @@ const CACHE_MAX = 64;
 export default Plugin.define({
   id: "opencode-memo",
   async setup(ctx) {
-    // sid -> { promise, text }: one onSessionStart per session; `text` pins the
-    // resolved bytes so concurrent renders (and the prompt cache) see identical
-    // text — the frozen snapshot the enforcement contract depends on.
+
     const snapshots = new Map();
-    // sid -> guard state (see guardBefore).
+
     const guards = new Map();
 
     function snapshot(sid) {
@@ -67,14 +45,10 @@ export default Plugin.define({
       return g;
     }
 
-    // 0. Harness-side skill_create tool: writes <skills-dir>/<name>/SKILL.md
-    // locally, then auto-pushes (skill_put) and refreshes the sync view.
     await ctx.tool.transform((editor) => {
       editor.add(createSkillCreateTool());
     });
 
-    // 1. Every render: frozen orientation, then any reminders queued since the
-    // last render (one-shot — cleared once surfaced).
     await ctx.session.hook("context", async (event) => {
       const sid = String(event.sessionID ?? "default");
       const e = snapshot(sid);
@@ -87,13 +61,10 @@ export default Plugin.define({
       }
     });
 
-    // 2. Reminder guards — record memory use, queue at most one reminder each,
-    // fire the non-blocking drift check on skill use.
     await ctx.tool.hook("execute.before", (event) => {
       guardBefore(event, guard(String(event.sessionID ?? "default")), {});
     });
 
-    // 3. Compaction: carry the memory block forward (mirrors the hermes plugin).
     await ctx.session.hook("compaction", async (event) => {
       const sid = String(event.sessionID ?? "default");
       const e = snapshots.get(sid);
@@ -104,14 +75,10 @@ export default Plugin.define({
           summary: `## Session State Summary\n${e.text}\n\n${REMIND_PERSIST}`,
         };
       } catch {
-        // leave event.result unset -> normal model compaction proceeds
+
       }
     });
 
-    // 4. Disk-evident push: after a **/SKILL.md write (write/edit/patch) or a
-    // native skill_create/skill_update event, push the skill via skill_put.
-    // Only deterministic disk evidence triggers it (resolveSkillPath gates the
-    // path); never speculative, never background.
     await ctx.tool.hook("execute.after", (event) => {
       if (event.status !== "completed") return;
       const input = event.input ?? {};
