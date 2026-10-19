@@ -257,6 +257,7 @@ def test_same_as_link_records_alias_not_edge(tmp_path):
 
 def test_auto_emission_unchanged_by_agent_declaration(tmp_path):
     conn = mem(tmp_path)
+    seed(conn, "graph")
     save(conn, "graph.alpha", "durable atlas note for graph alpha",
          links=[{"to": "graph", "rel": "mentions"}], agent_id="A" * 8)
     assert edge(conn, "graph.alpha", "graph", "mentions") == (1.0,)

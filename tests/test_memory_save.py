@@ -221,3 +221,34 @@ def test_do_memory_save_bad_type_is_invalid_input(tmp_path):
         "error": "invalid_input", "detail": "bad type 'nonsense'"}
     assert count(conn) == 0
     conn.close()
+
+
+def mentions(conn):
+    return conn.execute(
+        "SELECT src_key, dst_key, rel FROM edges WHERE rel='mentions'"
+        " ORDER BY src_key, dst_key").fetchall()
+
+
+def test_no_mentions_edge_when_prefix_is_not_a_memory(tmp_path):
+    conn = mem(tmp_path)
+    save(conn, "preference.frontend-stack-core",
+         "durable frontend stack core note alpha")
+    assert mentions(conn) == []
+    conn.close()
+
+
+def test_mentions_edge_when_prefix_is_a_memory(tmp_path):
+    conn = mem(tmp_path)
+    save(conn, "memo", "durable memo hub note alpha")
+    save(conn, "memo.dashboard.packaging", "durable dashboard packaging note beta")
+    assert ("memo.dashboard.packaging", "memo", "mentions") in mentions(conn)
+    conn.close()
+
+
+def test_mentions_edge_needs_the_prefix_in_the_same_namespace(tmp_path):
+    conn = mem(tmp_path)
+    save(conn, "memo", "durable memo hub note alpha", namespace="one")
+    save(conn, "memo.dashboard.packaging", "durable dashboard packaging note beta",
+         namespace="two")
+    assert mentions(conn) == []
+    conn.close()

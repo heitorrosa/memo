@@ -58,10 +58,14 @@ def record_edges(conn: sqlite3.Connection, key: str, parent_key: str | None = No
             "created_at) VALUES(?,?,'derived_from',?,1.0,?)",
             (key, parent_key, namespace, now))
     if "." in key:
-        db.execute_sql(
-            "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,namespace,weight,"
-            "created_at) VALUES(?,?,'mentions',?,1.0,?)",
-            (key, key.split(".")[0], namespace, now))
+        prefix = key.split(".")[0]
+        if db.execute_sql(
+                "SELECT 1 FROM memories WHERE key=? AND namespace=? LIMIT 1",
+                (prefix, namespace)).fetchone():
+            db.execute_sql(
+                "INSERT OR IGNORE INTO edges(src_key,dst_key,rel,namespace,weight,"
+                "created_at) VALUES(?,?,'mentions',?,1.0,?)",
+                (key, prefix, namespace, now))
 
 
 def original_save(conn: sqlite3.Connection, key: str, value: str, type: str = "context",

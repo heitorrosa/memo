@@ -71,13 +71,22 @@ def test_derived_from_emitted_on_qualifies(tmp_path):
 
 def test_mentions_for_dotted_key(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     assert ("editor.indent", "editor", "mentions", 1.0) in edges(conn)
     conn.close()
 
 
+def test_no_mentions_when_prefix_is_not_a_memory(tmp_path):
+    conn = mem(tmp_path)
+    save(conn, "editor.indent", "prefers tabs")
+    assert [row for row in edges(conn) if row[2] == "mentions"] == []
+    conn.close()
+
+
 def test_mentions_multi_segment_leading_only(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "homelab", "durable homelab hub note alpha")
     save(conn, "homelab.memory.x", "durable homelab memory note alpha")
     rows = edges(conn)
     assert ("homelab.memory.x", "homelab", "mentions", 1.0) in rows
@@ -94,6 +103,7 @@ def test_natural_title_emits_no_mentions(tmp_path):
 
 def test_edges_idempotent_on_resave(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     save(conn, "editor.indent", "prefers tabs")
     assert [row for row in edges(conn) if row[2] == "mentions"] == [
@@ -103,6 +113,7 @@ def test_edges_idempotent_on_resave(tmp_path):
 
 def test_exact_key_update_emits_no_new_edges(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     before = edges(conn)
     assert save(conn, "editor.indent", "prefers spaces")["action"] == "updated"
@@ -112,6 +123,7 @@ def test_exact_key_update_emits_no_new_edges(tmp_path):
 
 def test_neighborhood_one_hop(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     save(conn, "editor.theme", "uses a dark theme")
     assert [r["key"] for r in neighborhood(conn, "editor.indent", 1)] == ["editor"]
@@ -120,6 +132,7 @@ def test_neighborhood_one_hop(tmp_path):
 
 def test_neighborhood_two_hop(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     save(conn, "editor.theme", "uses a dark theme")
     result = neighborhood(conn, "editor.indent", 2)
@@ -129,6 +142,7 @@ def test_neighborhood_two_hop(tmp_path):
 
 def test_neighborhood_excludes_superseded(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     save(conn, "editor.indent.v2", "prefers spaces instead of tabs")
     keys = {r["key"] for r in neighborhood(conn, "editor.indent.v2", 1)}
@@ -139,6 +153,7 @@ def test_neighborhood_excludes_superseded(tmp_path):
 
 def test_neighborhood_excludes_expired(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     save(conn, "editor.theme", "uses a dark theme", valid_until="2020-01-01")
     keys = {r["key"] for r in neighborhood(conn, "editor.indent", 2)}
@@ -149,6 +164,7 @@ def test_neighborhood_excludes_expired(tmp_path):
 
 def test_neighborhood_deterministic_order(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "hub", "durable hub note alpha")
     save(conn, "hub.one", "durable hub note alpha")
     save(conn, "hub.two", "durable hub note beta")
     save(conn, "hub.three", "durable hub note gamma")
@@ -166,6 +182,7 @@ def test_neighborhood_empty_graph(tmp_path):
 
 def test_neighborhood_depth_bounds(tmp_path):
     conn = mem(tmp_path)
+    save(conn, "editor", "durable editor hub note alpha")
     save(conn, "editor.indent", "prefers tabs")
     assert neighborhood(conn, "editor.indent", 0) == []
     assert neighborhood(conn, "editor.indent", 5) == neighborhood(conn, "editor.indent", 2)
