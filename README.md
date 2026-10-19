@@ -86,8 +86,19 @@ graph LR
 Point an agent at the server with a bearer token. With the default container the endpoint is `http://localhost:8080/mcp`:
 
 ```json
-{ "mcp": { "memo": { "type": "remote", "url": "http://localhost:8080/mcp",
-  "headers": { "Authorization": "Bearer ${MEMO_TOKEN}" } } } }
+{
+"mcp":
+  {
+  "memo":
+    {
+    "type": "remote",
+      "url": "http://localhost:8080/mcp",
+      "headers": { 
+        "Authorization": "Bearer ${MEMO_TOKEN}" 
+      } 
+    } 
+  } 
+}
 ```
 
 The OpenCode plugin in [`opencode-memo/`](opencode-memo/README.md) reads `MEMO_ENDPOINT` (default `http://localhost:8000/mcp`) and `MEMO_TOKEN`. Clients that cannot set headers can pass `?access_token=<token>` on the `/mcp` URL; the header wins when both are present, and URL tokens leak into proxy and browser logs. Web harnesses (ChatGPT, Claude.ai) take [`INSTRUCTIONS.md`](INSTRUCTIONS.md) in their system prompt instead.
