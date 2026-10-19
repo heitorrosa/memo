@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/memo-text.png" width="240" alt="memo logo"></p>
+<p align="center"><img src="assets/memo-ascii-text.png" width="240" alt="memo logo"></p>
 
 <p align="center">Durable memory and reusable skills for every agent, with a terminal dashboard to see and edit it.</p>
 
@@ -16,6 +16,8 @@ docker run -d --name memo -p 8080:8080 -v memo-data:/data -e MEMO_TOKEN=change-m
 
 Then open <http://localhost:8080/ui/> and paste the token. The dashboard keeps it in the browser, so you type it once. The database lives in the `memo-data` volume and survives container restarts.
 
+On Windows, `.\install.ps1` does the same thing with a generated token: it writes `.env`, pulls the image, starts the container on `./data` and prints the URL.
+
 | command | what runs | published port |
 | --- | --- | --- |
 | `docker run <image>` | memo server and nginx | 8080 |
@@ -25,52 +27,13 @@ Then open <http://localhost:8080/ui/> and paste the token. The dashboard keeps i
 In the default mode nginx is the public face. It serves `/ui/` and proxies `/api/`, `/mcp` and `/health` to the server on `127.0.0.1:5000`, so the dashboard and the API share one origin and need no CORS. The `ui` mode serves only the dashboard and proxies to another server, named by `MEMO_API` (default `http://127.0.0.1:5000`):
 
 ```sh
-docker run -d --name memo-ui -p 8080:8080 -e MEMO_API=http://host.docker.internal:5010 ghcr.io/heitorrosa/memo:latest ui
+docker pull ghcr.io/heitorrosa/memo:latest
+docker run -d --name memo --restart unless-stopped -p 8080:8080 -v ./data:/data -e MEMO_TOKEN=<from .env> ghcr.io/heitorrosa/memo:latest
 ```
 
 Never run two server processes against the same database: memo is the single writer, and the server refuses to start when another process holds the file.
 
 ## Dashboard
-
-```
-                        +++#+++    +++#++++
-                     +++#######+  +#######+++
-                  +++###########  ###########+++
-               +++##############  ##############+++
-            +++######++########+  #################+++
-         +++######++++   +#####+  +######   #+++######+++
-        +#######+++      +######  +######      +++#######+
-      ++######++         +######  #######         ++######+
-      +#######           +######  #######           +######+
-      +######            +#####+  ######+            ######+
-      +######            +#####+  +#####+            +#####+
-   +++######+            +#####+  +#####+            +#####++++
- +++######++             +#####+  +######             +++#####+++
-++#####+++               ######+  +######               +++#####+
-+#####++                 ######+  #######                 +######+
-+#####+         #+       +#####+  #######       ++         ######+
-+######        +##+      +#####+  #######      +##+        ######+
-+######       ++##+++    +#####+  #######    #####++       ######+
-+######   ++++######++++ +######  ######+ #+++######++++   ######+
-+#####+   ++++######+++# #######  ######+ ++++######+++    ######+
-+######       ++##++     +######  ######+     ++##++       ######+
-+#####+        ++#+      +######  ######+      +#++        ######+
-+######         ++       +######  ######+       ++        +######+
-+#########               +######  ######+               +++######+
- ++#########             +######  ######+             +++######++
-   ++########            +######  ######+            +#######++
-     ++######            +######  ######+            ######++
-      +######            +######  ######+            ######+
-      +######+           +######  ######+           +######+
-      ++#####+++         +######  ######+         +++#####++
-       +++######+++      ######+  #######      +++######+++
-         ++++######+++   ######+  #######   +++######++++
-            ++++###############+  ################++++
-               ++++############+  +############++++
-                  +++##########+  +##########+++
-                     +++#####++    ++######++
-                        ++++++      ++++++
-```
 
 The dashboard is a terminal-style app (Vite, React, TypeScript, Tailwind) served at `/ui/`. It has four panes: MEMORIES, SKILLS, AGENTS, APP. The band above them draws the memory graph: the edges you declared plus the correlations the server computes between memories.
 
