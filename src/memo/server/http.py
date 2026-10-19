@@ -16,12 +16,10 @@ from mcp.server.transport_security import (
     TransportSecurityMiddleware,
     TransportSecuritySettings,
 )
-from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.routing import Mount, Route
 
 from memo import db
-from memo.server.api import api_app
+from memo.server.api import create_api_app
 from memo.server.shared import VERSION
 from memo.server.static_ui import ui_routes
 
@@ -129,7 +127,7 @@ def trusted_security() -> TransportSecuritySettings:
 
 
 def build_http_app(server, token: str):
-    async def health_check(request):
+    async def health_check() -> JSONResponse:
         return JSONResponse({"ok": True, "version": VERSION,
                              "vec": "vec" if db.HAS_VEC else "bruteforce"})
 
@@ -144,9 +142,8 @@ def build_http_app(server, token: str):
         async with inner.router.lifespan_context(inner):
             yield
 
-    app = Starlette(lifespan=lifespan,
-                    routes=[Route("/health", health_check, methods=["GET"]),
-                            *ui_routes(),
-                            Mount("/api", app=api_app(server)),
-                            Mount("/", app=mcp_app)])
+    app = create_api_app(server, lifespan=lifespan)
+    app.add_api_route("/health", health_check, methods=["GET"])
+    app.router.routes.extend(ui_routes())
+    app.mount("/", mcp_app)
     return BearerAuth(app, token)

@@ -151,13 +151,52 @@ def test_memory_list_and_detail_and_delete(api):
 def test_memory_bad_input(api):
     client, _ = api
     assert save(client, key="x", value="a durable value",
-                type="nonsense").status_code == 400
-    assert save(client, key="x", type="context").status_code == 400
+                type="nonsense").status_code == 422
+    assert save(client, key="x", type="context").status_code == 422
     assert save(client, value="a durable value",
-                type="context").status_code == 400
+                type="context").status_code == 422
     bad = client.post("/api/memories", headers=AUTH, content="{not json")
-    assert bad.status_code == 400
+    assert bad.status_code == 422
     assert bad.json()["error"]["code"] == "invalid_input"
+
+
+def test_bad_body_keeps_the_error_envelope(api):
+    client, _ = api
+    bad = save(client, key="x", type="context")
+    assert bad.status_code == 422
+    body = bad.json()
+    assert set(body) == {"error"}
+    assert set(body["error"]) == {"code", "message"}
+    assert body["error"]["code"] == "invalid_input"
+
+
+def test_query_errors_stay_400(api):
+    client, _ = api
+    for path in ("/api/memories?type=nonsense",
+                 "/api/memories?status=nonsense",
+                 "/api/memories?sort=bogus",
+                 "/api/memories?limit=abc",
+                 "/api/memories?limit=0",
+                 "/api/skills?limit=999",
+                 "/api/skills/ghost?version=0"):
+        response = client.get(path, headers=AUTH)
+        assert response.status_code == 400, path
+        assert response.json()["error"]["code"] == "invalid_input", path
+
+
+def test_openapi_docs_and_schema(api):
+    client, _ = api
+    docs = client.get("/api/docs", headers=AUTH)
+    assert docs.status_code == 200
+    assert "text/html" in docs.headers["content-type"]
+    schema = client.get("/api/openapi.json", headers=AUTH)
+    assert schema.status_code == 200
+    paths = schema.json()["paths"]
+    assert "/api/memories" in paths
+    assert "/api/stats" in paths
+    assert "/api/skills" in paths
+    assert "/api/agents" in paths
+    assert "/api/graph" in paths
 
 
 def test_skills_roundtrip(api):
@@ -190,7 +229,7 @@ def test_skills_roundtrip(api):
 
     assert client.get("/api/skills/ghost", headers=AUTH).status_code == 404
     assert client.post("/api/skills", headers=AUTH,
-                       json={"name": "x"}).status_code == 400
+                       json={"name": "x"}).status_code == 422
 
 
 def test_agents(api):

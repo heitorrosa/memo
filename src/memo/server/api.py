@@ -5,22 +5,23 @@ import sys
 import threading
 import time
 
-from starlette.applications import Starlette
+from fastapi import FastAPI, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import JSONResponse
-from starlette.routing import Route
 
 from memo import db as memo_db
 from memo import embeddings
 from memo.memory.common import STABILITY
 from memo.models.orm import (
-    Agent,
-    AgentState,
-    Alias,
-    Edge,
-    EdgeDeclarer,
-    Memory,
-    Skill,
+    Agent as OrmAgent,
+    AgentState as OrmAgentState,
+    Alias as OrmAlias,
+    Edge as OrmEdge,
+    EdgeDeclarer as OrmEdgeDeclarer,
+    Memory as OrmMemory,
+    Skill as OrmSkill,
 )
 from memo.server.operations import (
     do_memory_delete,
@@ -41,6 +42,9 @@ MEMORY_COLUMNS = (
 SORTS = ("updated_at", "uses", "score")
 STATUSES = ("current", "superseded")
 STATUS_BY_CODE = {"not_found": 404, "cap_evicted": 409, "internal": 500}
+TYPE_PATTERN = "^(" + "|".join(STABILITY) + ")$"
+STATUS_PATTERN = "^(" + "|".join(STATUSES) + ")$"
+SORT_PATTERN = "^(" + "|".join(SORTS) + ")$"
 
 SIMILAR_TOP_K = 3
 SIMILAR_FLOOR = 0.35
@@ -53,10 +57,6 @@ RELATED_FLOOR = 0.25
 
 sim_cache: dict[str, tuple] = {}
 sim_lock = threading.Lock()
-
-
-class BadInput(Exception):
-    pass
 
 
 def status_for(code: str) -> int:
@@ -122,21 +122,6 @@ def memory_dict(row) -> dict:
     }
 
 
-def int_param(params, name: str, default, low=None, high=None):
-    raw_value = params.get(name)
-    if raw_value is None or raw_value == "":
-        return default
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        raise BadInput(f"{name} must be an integer")
-    if low is not None and value < low:
-        raise BadInput(f"{name} must be >= {low}")
-    if high is not None and value > high:
-        raise BadInput(f"{name} must be <= {high}")
-    return value
-
-
 def names(blob: str | None) -> list[str]:
     return [name for name in (blob or "").split(",") if name]
 
@@ -187,22 +172,22 @@ def list_items(conn, namespace: str, kind, status, sort: str, limit, offset):
 
 def build_memory_detail(conn, key: str, namespace: str):
     with memo_db.orm_ctx(conn):
-        row = Memory.get_or_none((Memory.key == key)
-                                 & (Memory.namespace == namespace))
+        row = OrmMemory.get_or_none((OrmMemory.key == key)
+                                    & (OrmMemory.namespace == namespace))
         if row is None:
             return None
-        edge_rows = list(Edge.select().where(
-            ((Edge.src_key == key) | (Edge.dst_key == key))
-            & (Edge.namespace == namespace)))
-        declarer_rows = list(EdgeDeclarer.select().where(
-            ((EdgeDeclarer.src_key == key) | (EdgeDeclarer.dst_key == key))
-            & (EdgeDeclarer.namespace == namespace)))
-        alias_rows = list(Alias.select().where(
-            ((Alias.segment == key) | (Alias.canonical == key))
-            & (Alias.namespace == namespace)))
-        family_rows = (list(Memory.select().where(
-            (Memory.family_id == row.family_id)
-            & (Memory.namespace == namespace)))
+        edge_rows = list(OrmEdge.select().where(
+            ((OrmEdge.src_key == key) | (OrmEdge.dst_key == key))
+            & (OrmEdge.namespace == namespace)))
+        declarer_rows = list(OrmEdgeDeclarer.select().where(
+            ((OrmEdgeDeclarer.src_key == key) | (OrmEdgeDeclarer.dst_key == key))
+            & (OrmEdgeDeclarer.namespace == namespace)))
+        alias_rows = list(OrmAlias.select().where(
+            ((OrmAlias.segment == key) | (OrmAlias.canonical == key))
+            & (OrmAlias.namespace == namespace)))
+        family_rows = (list(OrmMemory.select().where(
+            (OrmMemory.family_id == row.family_id)
+            & (OrmMemory.namespace == namespace)))
             if row.family_id else [])
     declared = {(d.src_key, d.dst_key, d.rel): d for d in declarer_rows}
     edges = []
@@ -317,7 +302,7 @@ def build_skill_detail(conn, lock, name: str, version):
     if "error" in out:
         return out
     with memo_db.orm_ctx(conn):
-        row = Skill.get_or_none(Skill.name == name)
+        row = OrmSkill.get_or_none(OrmSkill.name == name)
     if row is not None:
         out["source"] = row.source
         out["created_at"] = row.created_at
@@ -327,8 +312,8 @@ def build_skill_detail(conn, lock, name: str, version):
 
 def build_agents(conn) -> dict:
     with memo_db.orm_ctx(conn):
-        agent_rows = list(Agent.select().order_by(Agent.agent_id.asc()))
-        states = list(AgentState.select().order_by(AgentState.skill.asc()))
+        agent_rows = list(OrmAgent.select().order_by(OrmAgent.agent_id.asc()))
+        states = list(OrmAgentState.select().order_by(OrmAgentState.skill.asc()))
     by_agent: dict[str, list] = {}
     for state in states:
         by_agent.setdefault(state.agent_id, []).append(state)
@@ -453,171 +438,358 @@ def build_graph(conn, namespace: str, limit: int) -> dict:
     return {"nodes": nodes, "edges": edges, "similar": similar_pairs}
 
 
-def api_app(server):
+class MemoryLink(BaseModel):
+    to: str
+    rel: str
+
+
+class MemoryAlias(BaseModel):
+    segment: str
+    canonical: str
+
+
+class MemorySaveBody(BaseModel):
+    key: str = Field(min_length=1)
+    value: str
+    type: str
+    namespace: str = "default"
+    links: list[MemoryLink] | None = None
+    aliases: list[MemoryAlias] | None = None
+    agent_id: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+
+    @field_validator("type")
+    @classmethod
+    def known_type(cls, value: str) -> str:
+        if value not in STABILITY:
+            raise ValueError(f"type must be one of {sorted(STABILITY)}")
+        return value
+
+
+class SkillPutBody(BaseModel):
+    name: str = Field(min_length=1)
+    description: str
+    body: str
+    source: str = "local"
+
+
+class SkillRevisionBody(BaseModel):
+    patch: str = Field(min_length=1)
+
+
+class Counts(BaseModel):
+    memories: int
+    current: int
+    superseded: int
+    archived: int
+    skills: int
+    agents: int
+    edges: int
+    aliases: int
+    episodes: int
+
+
+class Stats(BaseModel):
+    version: int
+    vec: str
+    ui: bool
+    db_path: str
+    counts: Counts
+    by_type: dict[str, int]
+    by_status: dict[str, int]
+    by_source: dict[str, int]
+    namespaces: list[str]
+    last_activity: str | None
+
+
+class Health(BaseModel):
+    ok: bool
+    version: int
+    vec: str
+
+
+class Memory(BaseModel):
+    key: str
+    namespace: str
+    value: str
+    type: str
+    stability: float
+    score: float
+    uses: int
+    status: str
+    agent_id: str | None
+    family_id: str | None
+    relation_type: str | None
+    superseded_by: str | None
+    created_at: str
+    updated_at: str
+    valid_from: str | None
+    valid_to: str | None
+    valid_until: str | None
+    degree: int
+
+
+class MemoryList(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[Memory]
+
+
+class MemoryEdge(BaseModel):
+    rel: str
+    src_key: str
+    dst_key: str
+    weight: float
+    declarers: list[str]
+    status: str
+    direction: str
+
+
+class Alias(BaseModel):
+    segment: str
+    canonical: str
+    status: str
+    evidence: int | str | None
+    declarers: list[str]
+
+
+class FamilyRow(BaseModel):
+    key: str
+    status: str
+    valid_from: str | None
+    valid_to: str | None
+    superseded_by: str | None
+    relation_type: str | None
+    relation_to_subject: str | None
+
+
+class Declarer(BaseModel):
+    src_key: str
+    dst_key: str
+    rel: str
+    declarers: list[str]
+    status: str
+    evidence: int | str | None
+
+
+class RelatedMemory(BaseModel):
+    key: str
+    type: str
+    status: str
+    uses: int
+    score: float
+
+
+class MemoryDetail(BaseModel):
+    memory: Memory
+    edges: list[MemoryEdge]
+    aliases: list[Alias]
+    family: list[FamilyRow]
+    declarers: list[Declarer]
+    related: list[RelatedMemory]
+
+
+class SkillSummary(BaseModel):
+    name: str
+    description: str
+    version: int
+    source: str
+    hash: str
+    created_at: str
+    updated_at: str
+    body_bytes: int
+    revisions: int
+
+
+class SkillList(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[SkillSummary]
+
+
+class Skill(BaseModel):
+    name: str
+    description: str
+    body: str
+    hash: str
+    version: int
+    source: str
+    created_at: str
+    updated_at: str
+
+
+class SkillDetail(BaseModel):
+    skill: Skill
+
+
+class AgentSkillRef(BaseModel):
+    skill: str
+    hash: str
+    version: int
+    updated_at: str
+
+
+class Agent(BaseModel):
+    agent_id: str
+    harness: str
+    capabilities: list[str]
+    first_seen: str
+    last_seen: str
+    skill_count: int
+    skills: list[AgentSkillRef]
+
+
+class AgentList(BaseModel):
+    items: list[Agent]
+
+
+class GraphNode(BaseModel):
+    key: str
+    type: str
+    status: str
+    uses: int
+    score: float
+    degree: int
+
+
+class GraphEdge(BaseModel):
+    src_key: str
+    dst_key: str
+    rel: str
+    weight: float
+
+
+class GraphLink(BaseModel):
+    src_key: str
+    dst_key: str
+    score: float
+
+
+class Graph(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+    similar: list[GraphLink]
+
+
+def create_api_app(server, lifespan=None) -> FastAPI:
+    app = FastAPI(title="memo", version="3.0.0", docs_url="/api/docs",
+                   openapi_url="/api/openapi.json", redoc_url=None,
+                   swagger_ui_oauth2_redirect_url=None, lifespan=lifespan)
     conn = server.memo_conn
     lock = server.memo_lock
     db_path = server.memo_db_path
-    from memo.server.static_ui import ui_dir
 
-    def guard(endpoint):
-        async def wrapped(request):
-            try:
-                return await endpoint(request)
-            except BadInput as exc:
-                return error("invalid_input", str(exc), 400)
-            except Exception as exc:
-                detail = internal_error(exc).get("detail", "internal error")
-                return error("internal", detail, 500)
-        wrapped.__name__ = getattr(endpoint, "__name__", "handler")
-        return wrapped
+    @app.exception_handler(RequestValidationError)
+    async def validation_failed(request: Request, exc: RequestValidationError):
+        errors = exc.errors()
+        roots = {str(err["loc"][0]) for err in errors if err["loc"]}
+        status = 400 if roots and roots <= {"query", "path"} else 422
+        message = "; ".join(
+            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
+            for err in errors)
+        return error("invalid_input", message, status)
 
-    async def json_body(request) -> dict:
-        try:
-            data = await request.json()
-        except Exception:
-            raise BadInput("body must be valid JSON")
-        if not isinstance(data, dict):
-            raise BadInput("body must be a JSON object")
-        return data
+    @app.exception_handler(Exception)
+    async def internal_failed(request: Request, exc: Exception):
+        detail = internal_error(exc).get("detail", "internal error")
+        return error("internal", detail, 500)
 
-    async def stats(request):
+    @app.get("/api/health", response_model=Health)
+    async def health():
+        return {"ok": True, "version": VERSION,
+                "vec": "vec" if memo_db.HAS_VEC else "bruteforce"}
+
+    @app.get("/api/stats", response_model=Stats)
+    async def stats():
+        from memo.server.static_ui import ui_dir
+
         built = ui_dir() is not None
-        return JSONResponse(await run_in_threadpool(build_stats, conn, db_path,
-                                                    built))
+        return await run_in_threadpool(build_stats, conn, db_path, built)
 
-    async def health(request):
-        return JSONResponse({"ok": True, "version": VERSION,
-                             "vec": "vec" if memo_db.HAS_VEC else "bruteforce"})
-
-    async def memories_list(request):
-        params = request.query_params
-        namespace = params.get("namespace") or "default"
-        query = params.get("q")
-        kind = params.get("type")
-        status = params.get("status")
-        limit = int_param(params, "limit", 50, 1, 500)
-        offset = int_param(params, "offset", 0, 0)
-        sort = params.get("sort") or "updated_at"
-        if kind is not None and kind not in STABILITY:
-            raise BadInput(f"type must be one of {sorted(STABILITY)}")
-        if status is not None and status not in STATUSES:
-            raise BadInput(f"status must be one of {list(STATUSES)}")
-        if sort not in SORTS:
-            raise BadInput(f"sort must be one of {list(SORTS)}")
-        if query:
-            out = await run_in_threadpool(search_items, conn, lock, query,
-                                          namespace, kind, limit, status)
+    @app.get("/api/memories", response_model=MemoryList)
+    async def memories_list(namespace: str | None = None, q: str | None = None,
+                            type: str | None = Query(None, pattern=TYPE_PATTERN),
+                            status: str | None = Query(None, pattern=STATUS_PATTERN),
+                            limit: int = Query(50, ge=1, le=500),
+                            offset: int = Query(0, ge=0),
+                            sort: str = Query("updated_at", pattern=SORT_PATTERN)):
+        namespace = namespace or "default"
+        if q:
+            out = await run_in_threadpool(search_items, conn, lock, q, namespace,
+                                          type, limit, status)
         else:
-            out = await run_in_threadpool(list_items, conn, namespace, kind,
+            out = await run_in_threadpool(list_items, conn, namespace, type,
                                           status, sort, limit, offset)
         if isinstance(out, dict) and "error" in out:
             return op_error(out)
-        return JSONResponse(out)
+        return out
 
-    async def memory_detail(request):
-        key = request.path_params["key"]
-        namespace = request.query_params.get("namespace") or "default"
-        out = await run_in_threadpool(build_memory_detail, conn, key, namespace)
-        if out is None:
-            return error("not_found", f"memory {key!r} not found", 404)
-        return JSONResponse(out)
-
-    async def memory_save(request):
-        data = await json_body(request)
-        key = data.get("key")
-        value = data.get("value")
-        kind = data.get("type")
-        if not isinstance(key, str) or not key:
-            raise BadInput("key is required and must be a non-empty string")
-        if not isinstance(value, str):
-            raise BadInput("value is required and must be a string")
-        if not isinstance(kind, str) or kind not in STABILITY:
-            raise BadInput(f"type must be one of {sorted(STABILITY)}")
-        links, aliases = data.get("links"), data.get("aliases")
-        if links is not None and not isinstance(links, list):
-            raise BadInput("links must be a list")
-        if aliases is not None and not isinstance(aliases, list):
-            raise BadInput("aliases must be a list")
+    @app.post("/api/memories")
+    async def memory_save(body: MemorySaveBody):
+        links = ([link.model_dump() for link in body.links]
+                 if body.links is not None else None)
+        aliases = ([alias.model_dump() for alias in body.aliases]
+                   if body.aliases is not None else None)
         out = await run_in_threadpool(
-            do_memory_save, conn, key, value, typ=kind,
-            namespace=data.get("namespace") or "default",
-            valid_from=data.get("valid_from"), lock=lock,
-            valid_until=data.get("valid_until"), agent_id=data.get("agent_id"),
+            do_memory_save, conn, body.key, body.value, typ=body.type,
+            namespace=body.namespace or "default", valid_from=body.valid_from,
+            lock=lock, valid_until=body.valid_until, agent_id=body.agent_id,
             links=links, aliases=aliases)
         return op_response(out)
 
-    async def memory_delete(request):
-        key = request.path_params["key"]
-        namespace = request.query_params.get("namespace") or "default"
-        out = await run_in_threadpool(do_memory_delete, conn, key, namespace,
-                                      lock)
+    @app.get("/api/memories/{key}", response_model=MemoryDetail)
+    async def memory_detail(key: str, namespace: str | None = None):
+        out = await run_in_threadpool(build_memory_detail, conn, key,
+                                      namespace or "default")
+        if out is None:
+            return error("not_found", f"memory {key!r} not found", 404)
+        return out
+
+    @app.delete("/api/memories/{key}")
+    async def memory_delete(key: str, namespace: str | None = None):
+        out = await run_in_threadpool(do_memory_delete, conn, key,
+                                      namespace or "default", lock)
         return op_response(out)
 
-    async def skills_list(request):
-        params = request.query_params
-        limit = int_param(params, "limit", 200, 1, 500)
-        offset = int_param(params, "offset", 0, 0)
-        out = await run_in_threadpool(skills_index, conn, params.get("q"),
-                                      params.get("source"), limit, offset)
-        return JSONResponse(out)
+    @app.get("/api/skills", response_model=SkillList)
+    async def skills_list(q: str | None = None, source: str | None = None,
+                          limit: int = Query(200, ge=1, le=500),
+                          offset: int = Query(0, ge=0)):
+        return await run_in_threadpool(skills_index, conn, q, source, limit,
+                                       offset)
 
-    async def skill_detail(request):
-        name = request.path_params["name"]
-        version = int_param(request.query_params, "version", None, 1)
+    @app.post("/api/skills")
+    async def skill_put(body: SkillPutBody):
+        out = await run_in_threadpool(
+            do_skill_put, conn, body.name, body.description, body.body,
+            source=body.source or "local", lock=lock)
+        return op_response(out)
+
+    @app.get("/api/skills/{name}", response_model=SkillDetail)
+    async def skill_detail(name: str, version: int | None = Query(None, ge=1)):
         out = await run_in_threadpool(build_skill_detail, conn, lock, name,
                                       version)
         if isinstance(out, dict) and "error" in out:
             return op_error(out)
-        return JSONResponse(out)
+        return out
 
-    async def skill_put(request):
-        data = await json_body(request)
-        name = data.get("name")
-        description = data.get("description")
-        body = data.get("body")
-        if not isinstance(name, str) or not name:
-            raise BadInput("name is required and must be a non-empty string")
-        if not isinstance(description, str):
-            raise BadInput("description is required and must be a string")
-        if not isinstance(body, str):
-            raise BadInput("body is required and must be a string")
-        out = await run_in_threadpool(
-            do_skill_put, conn, name, description, body,
-            source=data.get("source") or "local", lock=lock)
+    @app.post("/api/skills/{name}/revisions")
+    async def skill_update(name: str, body: SkillRevisionBody):
+        out = await run_in_threadpool(do_skill_update, conn, name, body.patch,
+                                      lock)
         return op_response(out)
 
-    async def skill_update(request):
-        name = request.path_params["name"]
-        data = await json_body(request)
-        patch = data.get("patch")
-        if not isinstance(patch, str) or not patch:
-            raise BadInput("patch is required and must be a non-empty string")
-        out = await run_in_threadpool(do_skill_update, conn, name, patch, lock)
-        return op_response(out)
+    @app.get("/api/agents", response_model=AgentList)
+    async def agents():
+        return await run_in_threadpool(build_agents, conn)
 
-    async def agents(request):
-        return JSONResponse(await run_in_threadpool(build_agents, conn))
+    @app.get("/api/graph", response_model=Graph)
+    async def graph(namespace: str | None = None,
+                    limit: int = Query(200, ge=1, le=2000)):
+        return await run_in_threadpool(build_graph, conn, namespace or "default",
+                                       limit)
 
-    async def graph(request):
-        params = request.query_params
-        namespace = params.get("namespace") or "default"
-        limit = int_param(params, "limit", 200, 1, 2000)
-        return JSONResponse(await run_in_threadpool(build_graph, conn, namespace,
-                                                    limit))
-
-    routes = [
-        Route("/health", guard(health), methods=["GET"]),
-        Route("/stats", guard(stats), methods=["GET"]),
-        Route("/memories", guard(memories_list), methods=["GET"]),
-        Route("/memories", guard(memory_save), methods=["POST"]),
-        Route("/memories/{key}", guard(memory_detail), methods=["GET"]),
-        Route("/memories/{key}", guard(memory_delete), methods=["DELETE"]),
-        Route("/skills", guard(skills_list), methods=["GET"]),
-        Route("/skills", guard(skill_put), methods=["POST"]),
-        Route("/skills/{name}", guard(skill_detail), methods=["GET"]),
-        Route("/skills/{name}/revisions", guard(skill_update),
-              methods=["POST"]),
-        Route("/agents", guard(agents), methods=["GET"]),
-        Route("/graph", guard(graph), methods=["GET"]),
-    ]
-    return Starlette(routes=routes)
+    return app
