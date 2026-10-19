@@ -17,15 +17,28 @@ repo file: `react` only, plus these files.
 
 ## Files
 
-- `grid.ts` — dependency-free, pure. `layout()` (similarity-driven positions on
-  the unit sphere), hash seeds, sphere → grid projection, Bresenham-ish edge
-  sampling, glyph selection, `buildFrame(nodes, edges, cols, rows, angle, opts)`.
-  Same args, same frame.
+- `grid.ts` — dependency-free, pure. `layout()` (one 2D force-directed pass
+  per payload), hash seeds, Bresenham-ish line sampling, node glyphs, labels,
+  `buildFrame(nodes, edges, cols, rows, phase, opts)`. `phase` only moves a
+  brightness band; same payload, same frame.
 - `Stage.tsx` — one `requestAnimationFrame` loop, redraws at `fps` (default 12),
-  angle advances `0.21 rad/s`. `layout()` is memoised on the payload signature
-  (node count, edge count, link count, key hash), never on `angle` or `focus`.
+  `phase` advances with time. `layout()` is memoised on the payload signature
+  (node count, edge count, link count, key hash), never on `phase` or `focus`.
 - `Banner.tsx` — a self-contained 5-row block font, typewriter reveal then a
   single shimmer sweep, then it stops.
+
+## The emblem, twice
+
+`LOGO_MASK` (`logo-mask.ts`, 66x37) is the repo mark. It appears in two places.
+
+- **Gate** — `LogoArt.tsx` animates it (`renderFrame`), full viewport.
+- **Sidebar** — `components/SidebarEmblem.tsx` is a static `<pre>`, no props and
+  no rAF, drawn at **28x10** (`text-blue/70`). At that size a nearest-neighbour
+  sample loses the outline, so each output cell is the **block max** of the
+  ~2.36 x 3.7 mask block it covers: `#` if any block cell is `#`, else `+` if
+  any is `+`, else a space. The silhouette survives; the interior thins.
+
+Change the mask and both follow — nothing is hand-copied per size.
 
 ## How it draws
 
@@ -37,49 +50,60 @@ absolutely-positioned `<pre>`, so a cell is painted twice at most and colour
 costs no per-cell DOM. `hits` lists the screen cell of each real node, used for
 the invisible focusable hit-boxes when `onSelect` is passed.
 
-- Node glyph: `P/A/F/C` by memory type at degree ≥ 3, else `o` / `+` / `.` by
-  prominence (below). Colour by type (amber/violet/coral/blue); superseded
-  nodes go faint.
-- Every node claims a **halo**: the first 2 free orthogonal cells around its
-  glyph (`HALO_MAX`), written `:` in faint, after the glyphs and before any
-  strand, so a cluster of related nodes reads as a blob and strands can never
-  cross a glyph or a halo.
-- Similarity strands: dotted (step 2) `.` dust in faint; focus-incident strands
-  draw solid. Declared edges: `-` `|` `/` `\` by slope; `contradicts` marks
-  every 4th cell `x` in coral, `supports` green, `derived_from` violet,
-  `mentions` faint.
-- Drawing order: any backdrop, then node cells (reserved, then glyphs, then
-  halos), then declared edges, then similarity strands. Strand ink ends up
-  clearly subordinate to node ink (frame-check measures it per angle).
+- Node glyph is **degree-sized**, coloured by type (amber/violet/coral/blue):
+  a hub (degree ≥ 4) is a 2x2 block of `█` if all four cells are free, else `●`;
+  degree 2-3 is `●`, degree 1 is `•`, degree 0 is `·`. Superseded and
+  out-of-focus nodes drop to a faint `.`. A hub is obvious from three metres.
+- **Labels on hubs** (degree ≥ 3), in `faint`, one row, one space to the right
+  of the glyph: the tail of the key after the last dot, truncated to the frame.
+  A label is claimed whole or skipped whole — and only against node cells, so
+  labels never overwrite a glyph but do win over a strand.
+- Declared edges: `-` `|` `/` `\` by slope, in the relation's role colour,
+  dashed at `+` where they cross. Similarity strands: dotted (step 2) `-` in
+  faint, at most 2 per node and only between nodes closer than `rows` cells.
+- Drawing order: any backdrop, then declared edges, then similar strands, then
+  nodes, then labels. Agency is explicit in that order: a dot always wins the
+  cell, and a label only ever loses to a dot.
 
 ### Where nodes sit
 
-`layout(nodes, edges, similar)` returns a 3D point per key on the unit sphere,
-seeded from `seedPos(key)` and relaxed with Fruchterman-Reingold: every pair
-repels (`k²/d · REPULSION`), every link pulls (`d²/k · w · PULL`), each step is
-capped by a cooling temperature, and every point is renormalised to the sphere.
-Link weight is `score` for a `similar` pair and `1` for a declared edge, so
-declared edges stay the strongest relation. `PULL` (16) vs `REPULSION` (0.3) are
-the two levers that keep clusters 3-8 cells wide instead of 20.
+`layout(nodes, edges, similar)` returns a 2D point per key in cell space,
+seeded from `seedPos(key)` (deterministic hash → jittered type-seeded
+quadrants) and relaxed once with Fruchterman-Reingold: every pair closer than
+`CUTOFF · k` repels (`k²/d`), every link pulls (`d²/k · w · PULL`), each step is
+capped by a cooling temperature, and every node is held near its seed
+(`ANCHOR`). Link weight is `score · 0.9` for a `similar` pair and `1.6` for a
+declared edge, so declared edges stay the strongest relation.
 
-Two calibrations keep a 243x22 frame readable (fixture: 137 nodes, per-type
-ring+skip links, 4 declared edges):
+The pass is bounded — `ITERS` cooling steps then `SETTLE` at a fixed low
+temperature — and then the settled cloud is **normalised onto the pane**: a
+per-axis min/max fit to `[1, cols-2] x [0, rows-1]`, which is what fills the
+frame instead of leaving a centred ellipse with dead margins. An axis where
+every node sits on one line is centred rather than stretched.
+
+Two calibrations keep a 243x22 frame readable (fixture: 137 nodes, 245
+block-local links, 4 declared edges):
 
 - `SIMILAR_PER_NODE` (2): every node keeps at most its top-2 links by score
   (undirected pairs count once), so at most ~n strands exist no matter how many
   links the server sends.
-- `STRAND_RATIO` (1.2): a strand longer than the row height x 1.2 is dropped —
-  it crosses the frame and reads as noise (frame-check: intra 0.83 vs cross
-  1.39 in 3D; neighbours project closer at all 16 rotations, worst 3.86x).
+- `LINE_RATIO` (2.5) for declared edges, `rows` for similarity: a strand longer
+  than that crosses the frame and reads as noise. Links are local by construction,
+  so the mean linked span stays far below the mean span of an arbitrary pair
+  (frame-check: 12 cells vs 73).
 
-The layout is a **rotating** field, not a stable chart: only the caller's
-`angle` moves, `layout()` never re-runs per frame, and the frame is re-centred
-every redraw by two deterministic translations — centre of mass to the origin,
-then a median-cell translation so the mass sits in the middle of the pane (the
-median is robust against clamped outliers).
+The layout is a **frozen chart**: `phase` (the 5th argument, named for the
+signature it kept) drives only the brightness band, `layout()` never re-runs
+per frame, and nothing is re-centred per redraw. No `Math.random`, no time
+input: `frame-check` diffs the frame between phases and expects 0 changed
+cells.
 
-No `Math.random`, no time input. `hits`, `dim` and the overlay contract are
-unchanged. `Stage.tsx` memoises the result on the payload signature.
+### The animation
+
+Position is data, so position never moves. `phase` slides a soft diagonal band
+across the frame (`BAND_HALF` cells either side): cells inside it are lifted one
+step in the role ladder (faint → amber, blue → green), which reads as a slow
+sweep over a still picture.
 
 ### Focus
 
@@ -93,19 +117,18 @@ memory, and what it is close to".
 
 1. **Strands are rare and short.** Candidate `similar` pairs are ranked by
    score, deduped undirected, and capped at 2 per node (`SIMILAR_PER_NODE`); a
-   strand longer than `STRAND_RATIO x rows` is dropped. Declared edges draw
-   first; no shared cell budget — the length cap and the per-node tally are
-   what bound the ink.
-2. **Occupy-once.** An edge can never overwrite a written cell (first writer
-   wins) and node cells are *claimed* — glyph then halo — before any strand is
-   drawn, so no strand runs through a glyph or halo. Edges shorter than 3
-   projected cells are skipped. Node cells themselves are de-duplicated: a node
-   that lands on a taken cell walks a spiral of up to 3 rings to the nearest
-   free one, so a cluster never hides a node, and `hits` stays unique per key.
-3. **Prominence grading.** `prominence = 0.55·degree + 0.30·log(uses) + 0.15·score`
-   gives the sub-letter tier (`o` at ≥ 0.55, `+` at ≥ 0.30, `.` below) so a
-   sparse graph of low-degree nodes still reads as a *graded* field rather than
-   flat dust.
+   strand must be shorter than `rows` cells, a declared edge than
+   `LINE_RATIO x rows`. The length caps and the per-node tally are what bound
+   the ink — no shared cell budget.
+2. **Occupy-once, then dots win.** Lines claim cells first-come-first-served;
+   nodes are written after them, then labels. A label must own every cell it
+   touches, so a hub next to another node simply goes unlabelled (frame-check:
+   111/128 at 243x22). Node cells are de-duplicated: a node that lands on a
+   taken cell walks a spiral of up to 3 rings to the nearest free one, so a
+   cluster never hides a node, and `hits` stays unique per key.
+3. **Ink hierarchy.** Lines ~40% of the ink, nodes and labels ≥ 45% (measured
+   57% on the fixture), labels in `faint` so they never compete with the dots
+   they describe.
 
 ## Degrading honestly
 
@@ -114,7 +137,7 @@ memory, and what it is close to".
   data, or everything filtered out — the frame gets a faint **static backdrop
   texture**:
   hash-seeded `:` hairlines every 12 columns plus scattered `.` dust. It is
-  **texture, not data**: it never varies with `edges` or `angle`, it does not
+  **texture, not data**: it never varies with `edges` or `phase`, it does not
   claim cells, and it invents no node-to-node links. A decorative graph would be
   a lie about the data, so it is drawn as something obviously not a relation,
   and the real nodes and strands read bright on top of it. `Frame.sparse` says
@@ -135,6 +158,7 @@ No emoji. ASCII and box-drawing glyphs only.
 
 - Node colour is layered, not per-cell inline CSS; stacking order is the
   `OVERLAY_ROLES` order in `grid.ts`.
-- Hit-boxes refresh every 3rd redraw (~4/s) — they can lag a fast rotation by
+- Hit-boxes refresh every 3rd redraw (~4/s) — they can lag a layout change by
   one beat but never jitter.
 - `bannerRows` covers `A–Z 0–9 space - . : /`; anything else renders blank.
+

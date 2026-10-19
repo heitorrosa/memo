@@ -3,6 +3,7 @@ import { AsciiStage } from "./ascii";
 import { Frame, Wordmark } from "./components/Frame";
 import { Gate } from "./components/Gate";
 import { Line, Panel } from "./components/Panel";
+import { SidebarEmblem } from "./components/SidebarEmblem";
 import { Toast, type ToastMsg } from "./components/Toast";
 import { useAsync } from "./hooks/useAsync";
 import { useHotkeys } from "./hooks/useHotkeys";
@@ -176,7 +177,8 @@ export default function App() {
       <div className="grid h-full grid-rows-[minmax(0,1fr)]">
         <div className="grid min-h-0 grid-cols-[264px_minmax(0,1fr)]">
           <aside className="flex min-h-0 flex-col border-r border-line">
-            <div className="flex items-center justify-center border-b border-line-soft px-5 py-6">
+            <div className="flex flex-col items-center justify-center gap-3 border-b border-line-soft px-5 py-5">
+              <SidebarEmblem />
               <Wordmark className="text-[12px] text-amber" />
             </div>
 
@@ -206,7 +208,7 @@ export default function App() {
             </div>
           </aside>
 
-          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+          <div className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]">
             <Panel
               title="MEMORY GRAPH"
               className="scan shrink-0 border-b border-line"
@@ -220,7 +222,7 @@ export default function App() {
                   : undefined
               }
             >
-              <div className="h-[clamp(12rem,30vh,22rem)] overflow-hidden px-3 pb-1">
+              <div className="h-[clamp(12rem,30vh,22rem)] w-full min-w-0 overflow-hidden px-3 pb-1">
                 {graph.state.status === "loading" ? (
                   <Line kind="loading">loading ...</Line>
                 ) : graph.state.status === "error" ? (

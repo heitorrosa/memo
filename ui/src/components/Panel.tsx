@@ -33,13 +33,13 @@ export function Panel({
   bodyClassName?: string;
 }) {
   return (
-    <section className={`flex min-h-0 flex-col ${className}`}>
-      <header className="flex shrink-0 items-center gap-2 px-3 pt-1.5">
+    <section className={`flex min-h-0 min-w-0 flex-col ${className}`}>
+      <header className="flex min-w-0 shrink-0 items-center gap-2 px-3 pt-1.5">
         <span className="microlabel text-muted">{title}</span>
         <span aria-hidden="true" className="h-px min-w-4 flex-1 bg-line" />
-        {meta ? <span className="microlabel tabular">{meta}</span> : null}
+        {meta ? <span className="microlabel min-w-0 truncate tabular">{meta}</span> : null}
       </header>
-      <div className={`min-h-0 flex-1 ${bodyClassName}`}>{children}</div>
+      <div className={`min-h-0 min-w-0 flex-1 ${bodyClassName}`}>{children}</div>
     </section>
   );
 }

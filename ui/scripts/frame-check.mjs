@@ -1,7 +1,8 @@
 // Frame check for the ASCII stage: no test runner, no dependencies.
 //   node --experimental-strip-types scripts/frame-check.mjs
-// Live-shaped fixture (137 nodes, 274 similar, 4 declared edges) at 243x22,
-// asserts the ink/legibility tune, exits non-zero on any failed assert.
+// Live-shaped fixture (137 nodes: 21 P / 102 C / 10 F / 4 A, 245 similar,
+// 4 declared edges) at 243x22. Asserts that the layout is a filled, frozen
+// chart — phase only moves a brightness band — and prints the evidence.
 import assert from 'node:assert/strict';
 import { buildFrame, layout, seedPos } from '../src/ascii/grid.ts';
 
@@ -14,15 +15,19 @@ const ok = (name) => {
 const COLS = 243;
 const ROWS = 22;
 const TOTAL = COLS * ROWS + ROWS - 1;
-const MAX_LEN = Math.ceil(ROWS * 1.2);
+const NODE_GLYPHS = new Set(['●', '█', '•', '·', '.']);
+const LABEL_DEGREE = 3;
 
 /* ------------------------------------------------------------- fixture -- */
-// Live shape: 137 nodes (preference 21, context 102, feedback 10, analysis 4),
-// similarity links as a per-type ring + skip, 4 declared edges.
 
 const nodes = [];
 const members = { preference: [], context: [], feedback: [], analysis: [] };
-for (const [type, m] of [['preference', 21], ['context', 102], ['feedback', 10], ['analysis', 4]]) {
+for (const [type, m] of [
+  ['preference', 21],
+  ['context', 102],
+  ['feedback', 10],
+  ['analysis', 4],
+]) {
   for (let i = 0; i < m; i++) {
     const key = `${type[0]}${nodes.length}`;
     members[type].push(key);
@@ -32,18 +37,37 @@ for (const [type, m] of [['preference', 21], ['context', 102], ['feedback', 10],
       status: type === 'analysis' && i === 0 ? 'superseded' : 'current',
       uses: (i * 5) % 40,
       score: 0.3 + ((i * 7) % 10) / 14,
-      degree: 1 + (i % 4),
+      degree: 0,
     });
   }
 }
 
+// Similarity is block-local (blocks of 8 inside one type) plus two hubs per
+// type, which is the shape a cosine-neighbour graph has. A ring per type would
+// be a ring on screen — the fixture must not lie about the topology.
 const similar = [];
-for (const keys of Object.values(members)) {
+const seen = new Set();
+const link = (a, b, score) => {
+  if (a === b) return;
+  const pair = a < b ? `${a}>${b}` : `${b}>${a}`;
+  if (seen.has(pair)) return;
+  seen.add(pair);
+  similar.push({ src_key: a, dst_key: b, score });
+};
+for (const [type, keys] of Object.entries(members)) {
+  const hubs = [keys[0], keys[Math.floor(keys.length / 2)]];
   for (let i = 0; i < keys.length; i++) {
-    similar.push({ src_key: keys[i], dst_key: keys[(i + 1) % keys.length], score: 0.82 });
-    similar.push({ src_key: keys[i], dst_key: keys[(i + 2) % keys.length], score: 0.61 });
+    const start = Math.floor(i / 8) * 8;
+    const size = Math.min(8, keys.length - start);
+    const a = (i * 5 + 3) % size;
+    const b = (i * 3 + 1) % size;
+    if (a !== i - start) link(keys[i], keys[start + a], 0.55 + ((i * 3) % 40) / 100);
+    if (b !== i - start) link(keys[i], keys[start + b], 0.5 + ((i * 7) % 40) / 100);
+    if (i % 4 === 0) link(keys[i], keys[start + ((i * 11 + 5) % size)], 0.45);
+    if (i % 8 === 0) link(keys[i], hubs[i % hubs.length], 0.88);
   }
 }
+if (similar.length > 245) similar.length = 245; // live link count
 
 const edges = [
   { src_key: members.context[0], dst_key: members.context[30], rel: 'supports', weight: 1 },
@@ -52,233 +76,217 @@ const edges = [
   { src_key: members.context[2], dst_key: members.feedback[3], rel: 'contradicts', weight: 1 },
 ];
 
+const degree = new Map(nodes.map((n) => [n.key, 0]));
+for (const l of similar) {
+  degree.set(l.src_key, degree.get(l.src_key) + 1);
+  degree.set(l.dst_key, degree.get(l.dst_key) + 1);
+}
+for (const e of edges) {
+  degree.set(e.src_key, degree.get(e.src_key) + 1);
+  degree.set(e.dst_key, degree.get(e.dst_key) + 1);
+}
+for (const n of nodes) n.degree = degree.get(n.key);
+
 const OPTS = { similar };
-const cell = (frame, key) => frame.hits.find((h) => h.key === key);
 const lines = (frame) => frame.text.split('\n');
 const at = (frame, row, col) => lines(frame)[row][col];
+const cell = (frame, key) => frame.hits.find((h) => h.key === key);
 
-/** Per-frame ink stats from the frame + hits alone. */
-function stats(frame) {
-  const grid = lines(frame);
-  const nodeCells = new Set(frame.hits.map((h) => h.row * COLS + h.col));
-  let nonSpace = 0;
-  let glyph = 0;
-  let halo = 0;
-  let strand = 0;
-  let longest = 0;
+/** Cells whose glyph differs between two frames — colour is not in `text`. */
+function diffCells(a, b) {
+  const A = lines(a);
+  const B = lines(b);
+  let d = 0;
   for (let row = 0; row < ROWS; row++) {
-    let run = 0;
-    for (let col = 0; col < COLS; col++) {
-      const ch = grid[row][col];
-      if (ch === ' ') { run = 0; continue; }
-      nonSpace++;
-      run++;
-      longest = Math.max(longest, run);
-      const i = row * COLS + col;
-      if (nodeCells.has(i)) glyph++;
-      else if (ch === ':') halo++;
-      else strand++;
-    }
+    for (let col = 0; col < COLS; col++) if (A[row][col] !== B[row][col]) d++;
   }
-  for (let col = 0; col < COLS; col++) {
-    let run = 0;
-    for (let row = 0; row < ROWS; row++) {
-      if (grid[row][col] === ' ') { run = 0; continue; }
-      run++;
-      longest = Math.max(longest, run);
-    }
-  }
-  const median = (xs) => {
-    const s = [...xs].sort((a, b) => a - b);
-    return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-  };
-  return {
-    occupancy: nonSpace / TOTAL,
-    node: glyph,
-    halo,
-    strand,
-    longest,
-    medCol: median(frame.hits.map((h) => h.col)),
-    medRow: median(frame.hits.map((h) => h.row)),
-  };
+  return d;
 }
 
-/* --------------------------------------------------------- determinism -- */
+/* ----------------------------------------------------------- the layout -- */
 
-const first = buildFrame(nodes, edges, COLS, ROWS, 0, OPTS);
-const again = buildFrame(nodes, edges, COLS, ROWS, 0, OPTS);
-assert.equal(again.text, first.text);
-assert.deepEqual(again.overlays, first.overlays);
-assert.deepEqual(again.hits, first.hits);
-assert.deepEqual(layout(nodes, edges, similar), layout(nodes, edges, similar));
-ok('same payload, same frame (text, overlays, hits, layout)');
+const points = layout(nodes, edges, similar, COLS, ROWS);
+assert.deepEqual(layout(nodes, edges, similar, COLS, ROWS), points);
+ok('layout is deterministic (same payload -> identical cells, no Math.random)');
 
-/* ------------------------------------------------------------ structure -- */
-
-const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-const mean = (xs) => xs.reduce((sum, x) => sum + x, 0) / xs.length;
-const points = layout(nodes, edges, similar);
+const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const mean = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
 
 const intra = [];
 const cross = [];
 const types = Object.keys(members);
-const swap = (t) => types[(types.indexOf(t) + 1) % types.length];
 for (const t of types) {
   for (let i = 0; i < members[t].length; i++) {
     for (let j = i + 1; j < members[t].length; j++) {
-      intra.push(dist3(points.get(members[t][i]), points.get(members[t][j])));
+      intra.push(dist2(points.get(members[t][i]), points.get(members[t][j])));
     }
     for (const u of types) {
       if (u === t) continue;
       const other = members[u][Math.min(i, members[u].length - 1)];
-      cross.push(dist3(points.get(members[t][i]), points.get(other)));
+      cross.push(dist2(points.get(members[t][i]), points.get(other)));
     }
   }
 }
 const intraMean = mean(intra);
 const crossMean = mean(cross);
-assert.ok(intraMean < crossMean * 0.75, `clusters overlap: ${intraMean.toFixed(2)} vs ${crossMean.toFixed(2)}`);
-ok(`clusters separate in 3D (intra ${intraMean.toFixed(2)} vs cross ${crossMean.toFixed(2)})`);
+assert.ok(intraMean < crossMean * 0.75, `type clusters overlap: ${intraMean.toFixed(1)} vs ${crossMean.toFixed(1)}`);
+ok(`same-type nodes gather (intra ${intraMean.toFixed(1)} vs cross ${crossMean.toFixed(1)} world cells)`);
 
-const span2 = (frame, a, b) => {
-  const ca = cell(frame, a);
-  const cb = cell(frame, b);
-  return Math.hypot(ca.col - cb.col, ca.row - cb.row);
-};
-let worst = Infinity;
-const sampleA = members.preference.slice(0, 12);
-for (let turn = 0; turn < 16; turn++) {
-  const frame = buildFrame(nodes, edges, COLS, ROWS, (turn * Math.PI) / 16, OPTS);
-  let nearestIn = 0;
-  let nearestOut = 0;
-  for (const t of ['preference', 'context']) {
-    const other = swap(t);
-    for (let i = 0; i < sampleA.length; i++) {
-      const key = members[t][i];
-      if (!cell(frame, key)) continue;
-      let mine = Infinity;
-      let theirs = Infinity;
-      for (let j = 0; j < members[t].length; j++) {
-        if (j === i) continue;
-        mine = Math.min(mine, span2(frame, key, members[t][j]));
-      }
-      for (let j = 0; j < members[other].length; j += 3) {
-        theirs = Math.min(theirs, span2(frame, key, members[other][j]));
-      }
-      nearestIn += mine;
-      nearestOut += theirs;
-    }
-  }
-  worst = Math.min(worst, nearestOut / nearestIn);
-  assert.ok(nearestIn < nearestOut, `clusters overlap on screen at ${((turn * Math.PI) / 16).toFixed(2)} rad`);
+/* --------------------------------------------------- layout is frozen -- */
+
+const PHASES = [0.1, 1.4, 3.9];
+const frames = PHASES.map((p) => buildFrame(nodes, edges, COLS, ROWS, p, OPTS));
+for (let i = 1; i < frames.length; i++) {
+  assert.equal(diffCells(frames[0], frames[i]), 0, `phase ${PHASES[i]} moved the layout`);
 }
-ok(`neighbours project closer at all 16 rotations (worst ratio ${worst.toFixed(2)}x)`);
+ok(`phase ${PHASES.join('/')} -> 0 differing cells after stripping colour`);
 
-/* ------------------------------------------------------------- geometry -- */
+// ...while the brightness band really does move: the layers must differ.
+const layerOf = (frame, role) => frame.overlays.find((o) => o.role === role)?.text ?? '';
+assert.notEqual(layerOf(frames[0], 'faint'), layerOf(frames[1], 'faint'));
+assert.notEqual(layerOf(frames[0], 'amber'), layerOf(frames[1], 'amber'));
+ok('brightness band moves (faint + amber layers differ between phases)');
 
-assert.equal(first.text.length, TOTAL);
-for (const layer of first.overlays) {
+/* ------------------------------------------------------------ the frame -- */
+
+const frame = frames[0];
+assert.equal(frame.text.length, TOTAL);
+for (const layer of frame.overlays) {
   assert.equal(layer.text.length, TOTAL);
-  const rows = layer.text.split('\n');
-  rows.forEach((line, row) => {
+  layer.text.split('\n').forEach((line, row) => {
     [...line].forEach((ch, col) => {
-      if (ch === ' ') return;
-      assert.equal(at(first, row, col), ch, `overlay ${layer.role} disagrees at ${row},${col}`);
+      if (ch !== ' ') assert.equal(at(frame, row, col), ch, `overlay ${layer.role} disagrees at ${row},${col}`);
     });
   });
 }
-ok(`frame + ${first.overlays.length} overlays are exact ${COLS}x${ROWS} layers, cell for cell`);
-assert.equal(first.sparse, false, 'live frame must not get the backdrop');
-assert.equal(first.hits.length, nodes.length);
-assert.equal(new Set(first.hits.map((h) => `${h.col},${h.row}`)).size, first.hits.length, 'hit cells collide');
-ok('sparse stays off and hit cells are unique');
+ok(`frame + ${frame.overlays.length} overlays are exact ${COLS}x${ROWS} layers, cell for cell`);
 
-/* --------------------------------------------------- centring + ink tune -- */
+/* ------------------------------------------------------------ node cells -- */
 
-let report = 'angle  occ%   node halo strand  longest  medCol/Row\n';
-for (const angle of [0, 1, 2]) {
-  const frame = buildFrame(nodes, edges, COLS, ROWS, angle, OPTS);
-  const s = stats(frame);
-  assert.equal(frame.sparse, false);
-  assert.ok(s.occupancy >= 0.06 && s.occupancy <= 0.12, `angle ${angle}: occupancy ${(s.occupancy * 100).toFixed(1)}% outside 6-12%`);
-  assert.ok(s.strand < s.node + s.halo, `angle ${angle}: strand ${s.strand} >= node ink ${s.node + s.halo}`);
-  assert.ok(s.longest <= MAX_LEN, `angle ${angle}: run ${s.longest} > ${MAX_LEN}`);
-  assert.ok(Math.abs(s.medCol - (COLS - 1) / 2) <= 4, `angle ${angle}: median col ${s.medCol} off centre`);
-  assert.ok(Math.abs(s.medRow - (ROWS - 1) / 2) <= 3, `angle ${angle}: median row ${s.medRow} off centre`);
-  report += `${angle}     ${(s.occupancy * 100).toFixed(1)}  ${String(s.node).padStart(4)} ${String(s.halo).padStart(4)} ${String(s.strand).padStart(6)}  ${String(s.longest).padStart(7)}  ${s.medCol}/${s.medRow}\n`;
+assert.equal(frame.hits.length, nodes.length, 'missing hit-boxes');
+assert.equal(new Set(frame.hits.map((h) => `${h.col},${h.row}`)).size, frame.hits.length, 'two nodes on one cell');
+let offGlyph = 0;
+let offBounds = 0;
+for (const h of frame.hits) {
+  if (h.col < 0 || h.col >= COLS || h.row < 0 || h.row >= ROWS) offBounds++;
+  if (!NODE_GLYPHS.has(at(frame, h.row, h.col))) offGlyph++;
 }
-console.log(`\n  ink at angles 0/1/2:\n${report}`);
-ok('occupancy 6-12%, strand ink < node ink, runs <= 26, mass centred at 0/1/2');
+assert.equal(offBounds, 0, `${offBounds} node cells out of bounds`);
+assert.equal(offGlyph, 0, `${offGlyph} node cells do not hold a node glyph`);
+ok(`137 node cells: all in bounds, all hold a node glyph, none shared`);
 
-/* ----------------------------------------------------------------- focus -- */
+/* --------------------------------------------------------------- fills -- */
+
+const cols = frame.hits.map((h) => h.col);
+const rows = frame.hits.map((h) => h.row);
+const fillX = (Math.max(...cols) - Math.min(...cols) + 1) / COLS;
+const fillY = (Math.max(...rows) - Math.min(...rows) + 1) / ROWS;
+assert.ok(fillX >= 0.8, `node bbox covers ${(fillX * 100).toFixed(0)}% of columns (< 80%)`);
+assert.ok(fillY >= 0.7, `node bbox covers ${(fillY * 100).toFixed(0)}% of rows (< 70%)`);
+ok(`nodes fill the pane: ${(fillX * 100).toFixed(0)}% of cols x ${(fillY * 100).toFixed(0)}% of rows`);
+
+/* --------------------------------------------------------------- labels -- */
+
+const glyphInk = (frame.text.match(/[●█•·]/g) ?? []).length;
+const labelInk = (frame.text.match(/[A-Za-z0-9]/g) ?? []).length;
+const tailOf = (key) => (key.includes('.') ? key.slice(key.lastIndexOf('.') + 1) : key);
+const hubs = nodes.filter((n) => n.degree >= LABEL_DEGREE);
+// A hub counts as labelled when the text the renderer would write (the tail of
+// its key, truncated to the frame) sits right there, after the single space.
+const labelled = hubs.filter((n) => {
+  const h = cell(frame, n.key);
+  if (!h) return false;
+  const line = lines(frame)[h.row];
+  const tail = tailOf(n.key);
+  return [2, 3].some((d) => {
+    const room = COLS - h.col - d;
+    if (room < 2) return false;
+    return line.slice(h.col + d, h.col + d + Math.min(room, tail.length)) === tail.slice(0, Math.min(room, tail.length));
+  });
+});
+const labelPct = labelled.length / hubs.length;
+assert.ok(labelPct >= 0.85, `only ${(labelPct * 100).toFixed(1)}% of degree>=3 nodes are labelled`);
+ok(`${labelled.length}/${hubs.length} degree>=3 nodes labelled (${(labelPct * 100).toFixed(1)}%), tail of the key`);
+
+/* --------------------------------------------------------------- ink mix -- */
+
+let nonSpace = 0;
+let longest = 0;
+for (let row = 0; row < ROWS; row++) {
+  let run = 0;
+  for (let col = 0; col < COLS; col++) {
+    const ch = at(frame, row, col);
+    if (ch === ' ') {
+      run = 0;
+      continue;
+    }
+    nonSpace++;
+    run++;
+    longest = Math.max(longest, run);
+  }
+}
+const nodeShare = (glyphInk + labelInk) / nonSpace;
+const lineInk = nonSpace - glyphInk - labelInk;
+assert.ok(nodeShare >= 0.45, `node+label ink ${(nodeShare * 100).toFixed(1)}% of non-space ink (< 45%)`);
+ok(
+  `ink: ${nonSpace}/${TOTAL} cells (${((nonSpace / TOTAL) * 100).toFixed(1)}% occupancy), ` +
+    `nodes ${glyphInk}, labels ${labelInk}, lines ${lineInk} — node+label ${(nodeShare * 100).toFixed(1)}%, ` +
+    `longest run ${longest}`,
+);
+assert.ok(nonSpace / TOTAL <= 0.35, `occupancy ${((nonSpace / TOTAL) * 100).toFixed(1)}% > 35%`);
+
+/* -------------------------------------------- links are short on screen -- */
+
+const linked = [];
+for (const e of edges) linked.push([e.src_key, e.dst_key]);
+for (const l of similar) linked.push([l.src_key, l.dst_key]);
+const span = (a, b) => Math.hypot(a.col - b.col, a.row - b.row);
+const linkedSpan = mean(linked.map(([a, b]) => span(cell(frame, a), cell(frame, b))));
+const everyPair = [];
+for (let i = 0; i < frame.hits.length; i++) {
+  for (let j = i + 1; j < frame.hits.length; j++) everyPair.push(span(frame.hits[i], frame.hits[j]));
+}
+const pairMean = mean(everyPair);
+assert.ok(linkedSpan < pairMean * 0.6, `linked pairs ${linkedSpan.toFixed(1)} vs any pair ${pairMean.toFixed(1)}`);
+ok(`links are short: linked pairs ${linkedSpan.toFixed(1)} cells vs ${pairMean.toFixed(1)} for any pair`);
+
+/* --------------------------------------------------------------- focus -- */
 
 const focusKey = members.context[0];
-const focused = buildFrame(nodes, edges, COLS, ROWS, 0, { ...OPTS, focus: focusKey });
-const farKey = members.preference[10];
-const dim = cell(focused, farKey);
-assert.equal(at(focused, dim.row, dim.col), '.', 'non-neighbour is not dimmed');
-const faint = focused.overlays.find((o) => o.role === 'faint');
-assert.ok(faint, 'no faint overlay when focused');
-assert.equal(faint.text.split('\n')[dim.row][dim.col], '.');
-ok('focus dims a non-neighbour to a faint dot');
-
+const focused = buildFrame(nodes, edges, COLS, ROWS, 0.1, { ...OPTS, focus: focusKey });
+const dimmed = cell(focused, members.preference[10]);
+assert.equal(at(focused, dimmed.row, dimmed.col), '.', 'non-neighbour is not dimmed');
+const faintLayer = focused.overlays.find((o) => o.role === 'faint');
+assert.ok(faintLayer && /\S/.test(faintLayer.text), 'no faint ink when focused');
+// The dim glyph may sit inside the brightness band, which lifts faint to
+// amber; either way exactly one colour layer must carry it.
+assert.ok(
+  focused.overlays.some((o) => o.text.split('\n')[dimmed.row][dimmed.col] === '.'),
+  'dimmed node carries no colour layer',
+);
 const lit = cell(focused, members.context[1]);
 assert.notEqual(at(focused, lit.row, lit.col), '.');
-ok('focus keeps a neighbour at full strength');
+ok('focus dims a non-neighbour to a faint dot and keeps a neighbour lit');
 
-// The focus node's own strands are solid: walk the sampled focus->neighbour
-// line and expect at least one claimed cell beyond the two glyphs.
-const walk = (from, to) => {
-  const dx = to.col - from.col;
-  const dy = to.row - from.row;
-  const len = Math.max(Math.abs(dx), Math.abs(dy));
-  let seen = 0;
-  for (let i = 0; i <= len; i++) {
-    const col = Math.round(from.col + dx * (i / len));
-    const row = Math.round(from.row + dy * (i / len));
-    if (i === 0 || i === len) continue;
-    if (at(focused, row, col) !== ' ') seen++;
-  }
-  return seen;
-};
-let strandCells = 0;
-for (const l of similar.filter((l) => l.src_key === focusKey || l.dst_key === focusKey).slice(0, 8)) {
-  const otherKey = l.src_key === focusKey ? l.dst_key : l.src_key;
-  const other = cell(focused, otherKey);
-  if (other) strandCells = Math.max(strandCells, walk(cell(focused, focusKey), other));
-}
-assert.ok(strandCells > 0, 'focus node has no drawn strand');
-ok(`focus node strands drawn (${strandCells} cells on a focus line)`);
-
-/* ------------------------------------------------------------- fallback -- */
-
-const legacy = buildFrame(nodes, edges, COLS, ROWS, 0);
-const empty = buildFrame(nodes, edges, COLS, ROWS, 0, { similar: [] });
-assert.equal(legacy.text, empty.text);
-// no similarity data -> the hash seeds, byte for byte
-const seeds = new Map(nodes.map((n) => [n.key, seedPos(n.key)]));
-const pinned = buildFrame(nodes, edges, COLS, ROWS, 0, { pos: seeds });
-assert.equal(legacy.text, pinned.text);
-ok('absent similar falls back to the hash seed (no throw, identical frame)');
-
-/* ---------------------------------------------------- sparse + rotation -- */
+/* --------------------------------------------------------- sparse + old -- */
 
 const bare = buildFrame(nodes, [], COLS, ROWS, 0);
 assert.equal(bare.sparse, true, 'no strands, no edges -> backdrop must draw');
 assert.ok(bare.text.includes(':'), 'backdrop hairlines missing');
 ok('sparse mode: nothing survives -> dust + hairlines, honestly marked');
 
-const angles = [0, 1, 2, 3, 4, 5, 6];
-const frames = angles.map((a) => buildFrame(nodes, edges, COLS, ROWS, a, OPTS).text);
-assert.equal(new Set(frames).size, 7, `only ${new Set(frames).size} distinct frames over 7 angles`);
-ok('7 angles -> 7 distinct frames (incl. pairwise-distinct 0/1/2)');
+const legacy = buildFrame(nodes, edges, COLS, ROWS, 0);
+const empty = buildFrame(nodes, edges, COLS, ROWS, 0, { similar: [] });
+assert.equal(legacy.text, empty.text);
+// no links at all -> the seeded field, untouched
+const seeds = new Map(nodes.map((n) => [n.key, seedPos(n, COLS, ROWS)]));
+const seeded = buildFrame(nodes, [], COLS, ROWS, 0, { similar: [], pos: seeds });
+const noLinks = buildFrame(nodes, [], COLS, ROWS, 0, { similar: [] });
+assert.equal(noLinks.text, seeded.text);
+ok('absent similar falls back to the seeded field (no throw, identical frame)');
 
-/* --------------------------------------------------------------- frames -- */
+/* --------------------------------------------------------------- print -- */
 
-console.log(`\n--- angle 0 (243x22) ---`);
-console.log(frames[0]);
-console.log(`\n--- angle 1 ---`);
-console.log(frames[1]);
-console.log(`\n--- angle 2 ---`);
-console.log(frames[2]);
+console.log(`\n--- 243x22, phase 0.1 ---`);
+console.log(frame.text);
 console.log(`\n${checks} checks passed`);

@@ -43,11 +43,39 @@ class _NotBuilt:
         await send({"type": "http.response.body", "body": body})
 
 
+class _UiCache:
+    """Cache policy for the built dashboard.
+
+    Starlette's StaticFiles sets no cache headers at all, so a browser happily
+    reuses a cached ``index.html`` and keeps running the previous bundle after
+    a rebuild - which reads as "the ui is not updated". HTML revalidates on
+    every load; content-hashed assets are immutable.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        html = scope.get("path", "").endswith(("/ui/", ".html"))
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start" and message.get("status") == 200:
+                header = b"no-cache" if html else b"public, max-age=31536000, immutable"
+                message = {**message, "headers": [
+                    *message.get("headers", []), (b"cache-control", header)]}
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 def ui_mount() -> Mount:
     directory = ui_dir()
     app = (StaticFiles(directory=str(directory), html=True)
            if directory else _NotBuilt())
-    return Mount("/ui", app=app)
+    return Mount("/ui", app=_UiCache(app))
 
 
 async def _root(request):

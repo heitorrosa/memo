@@ -1,7 +1,7 @@
 // Pure, dependency-free rasteriser for the memory-graph ASCII stage.
-// No React, no imports. Node positions come from `layout()` (similarity
-// relaxation over hash seeds), so the same payload always gives the same
-// picture; only the caller's `angle` moves.
+// No React, no imports. Node positions come from `layout()` — a 2D
+// force-directed graph computed once per payload — so the picture is a stable
+// chart: the caller's `phase` only slides a brightness band, never a position.
 
 export type AsciiNode = {
   key: string;
@@ -26,7 +26,8 @@ export type AsciiLink = {
   score: number;
 };
 
-export type Vec3 = [number, number, number];
+/** World position, in cell units: `x` in [0, cols], `y` in [0, rows*2]. */
+export type Vec2 = [number, number];
 
 export type Role =
   | 'ink'
@@ -83,54 +84,35 @@ const TYPE_ROLE: Record<string, Role> = {
   context: 'blue',
 };
 
-const TYPE_GLYPH: Record<string, string> = {
-  preference: 'P',
-  analysis: 'A',
-  feedback: 'F',
-  context: 'C',
-};
-
 const REL_ROLE: Record<string, Role> = {
   mentions: 'faint',
   supports: 'green',
   contradicts: 'coral',
   derived_from: 'violet',
-  // similarity strands: texture, not a declared relation
-  similar: 'faint',
 };
 
 const MAX_NODES = 200;
-/** Shortest projected edge worth drawing, in cells. */
+/** Shortest drawn segment worth reading, in cells. */
 const MIN_EDGE_LEN = 3;
 /**
+ * A line longer than the row height x 2.5 crosses most of the frame and reads
+ * as noise, so it is dropped. Similarity strands also step 2 cells, which
+ * keeps them subordinate to the declared edges and the node glyphs.
+ */
+const LINE_RATIO = 2.5;
+const SIMILAR_STEP = 2;
+/**
  * Similarity strands are local texture: each node keeps at most its top-2
- * links by score (undirected pairs count once), and a strand longer than the
- * row height (STRAND_RATIO x rows) is dropped: it crosses the frame and
- * reads as noise.
+ * links by score (undirected pairs count once).
  */
 const SIMILAR_PER_NODE = 2;
-/** Longest allowed strand, as a multiple of the row height. */
-const STRAND_RATIO = 1.2;
-/**
- * Attraction per link. Every pair repels (n^2 pairs, scaled by REPULSION) and
- * each link pulls with weight x PULL; REPULSION is the tune's lever that keeps
- * clusters 3-8 cells wide instead of 20. Declared edges stay the strongest
- * relation (weight 1, similarity <= its score).
- */
-const PULL = 16;
-const REPULSION = 0.3;
-/**
- * One ring of orthogonal cells around a node glyph, claimed as faint dust.
- * Each node claims the first 2 halo cells it finds free: enough that a cluster
- * reads as a blob, few enough that strands stay subordinate to nodes.
- */
-const HALO_MAX = 2;
-const HALO: [number, number][] = [
-  [-1, 0],
-  [1, 0],
-  [0, -1],
-  [0, 1],
-];
+/** Width either side of the brightness band, in diagonal cells. */
+const BAND_HALF = 10;
+/** Labels: hubs only, highest degree first, whole-or-nothing. */
+const LABEL_DEGREE = 3;
+
+/** Glyphs a line writes; a second line hitting one of them makes a `+`. */
+const LINE_GLYPHS = '-|/\\+';
 
 // --- determinism -----------------------------------------------------------
 
@@ -161,68 +143,95 @@ function rng(seed: number): () => number {
   };
 }
 
-/** Stable point on the unit sphere, in [-1,1]^3. Same key -> same point, always. */
-export function seedPos(key: string): [number, number, number] {
-  const r = rng(hashKey(key));
-  const z = r() * 2 - 1;
-  const t = r() * Math.PI * 2;
-  const s = Math.sqrt(Math.max(0, 1 - z * z));
-  return [Math.cos(t) * s, z, Math.sin(t) * s];
+/** Type -> quadrant centre in [0,1]^2 (y grows downward, like rows). */
+const QUADRANT: Record<string, [number, number]> = {
+  preference: [0.25, 0.25],
+  context: [0.75, 0.25],
+  feedback: [0.25, 0.75],
+  analysis: [0.75, 0.75],
+};
+
+/**
+ * Stable start point in world cells: the type's quadrant centre plus a hash
+ * jitter of half a quadrant, so same-type nodes begin as a loose cluster and
+ * never as one dot. Same key -> same point, always.
+ */
+export function seedPos(n: AsciiNode, cols: number, rows: number): Vec2 {
+  const r = rng(hashKey(n.key));
+  const [qx, qy] = QUADRANT[n.type] ?? [0.5, 0.5];
+  return [(qx + (r() - 0.5) * 0.5) * cols, (qy + (r() - 0.5) * 0.5) * rows * 2];
 }
 
 // --- layout ----------------------------------------------------------------
 
-/** Relaxation iterations: the cost is O(n^2) per pass, so it is capped twice. */
-const ITER_SMALL = 220;
-const ITER_LARGE = 120;
+/** Cooling passes, then a fixed low-temperature settle so the field stops dead. */
+const ITERS = 250;
+const SETTLE = 40;
+/**
+ * Force tune, in units of the ideal spacing `k = sqrt(area / nodes)`.
+ * REPULSION is local only (`CUTOFF * k`): long-range repulsion is what makes a
+ * strongly-linked group inflate into a ring around the frame edge.
+ * PULL is the link strength; ANCHOR ties each node near its seeded quadrant so
+ * the four type clusters stay apart instead of merging into one ball.
+ */
+const REPULSION = 1;
+const PULL = 1.2;
+const ANCHOR = 0.5;
+const CUTOFF = 1.5;
 
 /**
- * Unit-sphere layout that follows the data.
+ * 2D force-directed layout (Fruchterman-Reingold), computed once per payload.
  *
- * Seeds from `seedPos` (deterministic), then runs Fruchterman-Reingold:
- * every pair repels, one link per `similar` pair (weight `score`) and per
- * explicit edge (weight 1) attracts, and each pass renormalises back onto the
- * sphere so `project()` keeps working. No clock, no `Math.random`: the same
- * payload always gives the same points.
+ * World space is cell space (`x` in [0, cols], `y` in [0, rows*2] because a
+ * character cell is about twice as tall as it is wide). Seeds come from
+ * `seedPos`; every `similar` pair pulls with `score * 0.9`, every declared
+ * edge with `1.6`, every nearby pair repels with `k*k/d`, and every node is
+ * held near its seed. The result is exactly what the rotation destroyed:
+ * linked nodes stay near each other, same-type nodes stay grouped, and nothing
+ * moves between frames. No clock, no `Math.random`.
  *
- * With no `similar` pairs there is nothing to cluster on, so the hash seeds are
- * returned untouched and the stage looks exactly as it did before.
- *
- * Call it once per graph payload and pass the result to `buildFrame`.
+ * With no links at all there is nothing to cluster on, so the seeds are
+ * returned untouched and an old server still draws a deterministic field.
  */
 export function layout(
   nodes: AsciiNode[],
   edges: AsciiEdge[],
   similar: AsciiLink[] = [],
-): Map<string, Vec3> {
+  cols = 96,
+  rows = 14,
+): Map<string, Vec2> {
   const list = selectNodes(nodes);
-  const out = new Map<string, Vec3>();
+  const out = new Map<string, Vec2>();
+  const seeds: Vec2[] = list.map((n) => seedPos(n, cols, rows));
+  const pos: Vec2[] = seeds.map((p): Vec2 => [p[0], p[1]]);
+  list.forEach((n, i) => out.set(n.key, pos[i]));
+  if (list.length < 3) return out;
+
   const index = new Map<string, number>();
   list.forEach((n, i) => index.set(n.key, i));
-  const pos: Vec3[] = list.map((n) => seedPos(n.key));
 
-  if (similar.length === 0 || list.length < 3) {
-    list.forEach((n, i) => out.set(n.key, pos[i]));
-    return out;
-  }
-
-  type Link = { a: number; b: number; w: number };
-  const links: Link[] = [];
+  type Spring = { a: number; b: number; w: number };
+  const springs: Spring[] = [];
   const add = (src: string, dst: string, w: number) => {
     const a = index.get(src);
     const b = index.get(dst);
     if (a === undefined || b === undefined || a === b) return;
-    links.push({ a, b, w });
+    springs.push({ a, b, w });
   };
-  for (const s of similar) add(s.src_key, s.dst_key, clamp(s.score, 0, 1));
-  for (const e of edges) add(e.src_key, e.dst_key, 1);
+  for (const s of similar) add(s.src_key, s.dst_key, clamp(s.score, 0, 1) * 0.9);
+  for (const e of edges) add(e.src_key, e.dst_key, 1.6);
+  if (springs.length === 0) return out; // nothing to cluster on: keep the seeds
 
   const n = list.length;
-  const k = 1.6 / Math.sqrt(n);
-  const iters = n <= 140 ? ITER_SMALL : ITER_LARGE;
-  const disp = new Float64Array(n * 3);
+  const W = Math.max(1, cols);
+  const H = Math.max(1, rows * 2);
+  const k = Math.sqrt((W * H) / n);
+  const reach = k * CUTOFF;
+  const reach2 = reach * reach;
+  const disp = new Float64Array(n * 2);
+  const total = ITERS + SETTLE;
 
-  for (let it = 0; it < iters; it++) {
+  for (let it = 0; it < total; it++) {
     disp.fill(0);
     for (let i = 0; i < n; i++) {
       const pi = pos[i];
@@ -230,86 +239,121 @@ export function layout(
         const pj = pos[j];
         const dx = pi[0] - pj[0];
         const dy = pi[1] - pj[1];
-        const dz = pi[2] - pj[2];
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-4;
-        const f = ((k * k) / d) * REPULSION; // repulsion
+        const dd = dx * dx + dy * dy;
+        if (dd > reach2) continue; // far pairs already read as separate clusters
+        const d = Math.sqrt(dd) || 1e-4;
+        const f = ((k * k) / d) * REPULSION;
         const ux = (dx / d) * f;
         const uy = (dy / d) * f;
-        const uz = (dz / d) * f;
-        disp[i * 3] += ux;
-        disp[i * 3 + 1] += uy;
-        disp[i * 3 + 2] += uz;
-        disp[j * 3] -= ux;
-        disp[j * 3 + 1] -= uy;
-        disp[j * 3 + 2] -= uz;
+        disp[i * 2] += ux;
+        disp[i * 2 + 1] += uy;
+        disp[j * 2] -= ux;
+        disp[j * 2 + 1] -= uy;
       }
     }
-    for (const l of links) {
-      const pa = pos[l.a];
-      const pb = pos[l.b];
+    for (const s of springs) {
+      const pa = pos[s.a];
+      const pb = pos[s.b];
       const dx = pa[0] - pb[0];
       const dy = pa[1] - pb[1];
-      const dz = pa[2] - pb[2];
-      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-4;
-      const f = ((d * d) / k) * l.w * PULL; // attraction
+      const d = Math.sqrt(dx * dx + dy * dy) || 1e-4;
+      const f = ((d * d) / k) * s.w * PULL;
       const ux = (dx / d) * f;
       const uy = (dy / d) * f;
-      const uz = (dz / d) * f;
-      disp[l.a * 3] -= ux;
-      disp[l.a * 3 + 1] -= uy;
-      disp[l.a * 3 + 2] -= uz;
-      disp[l.b * 3] += ux;
-      disp[l.b * 3 + 1] += uy;
-      disp[l.b * 3 + 2] += uz;
+      disp[s.a * 2] -= ux;
+      disp[s.a * 2 + 1] -= uy;
+      disp[s.b * 2] += ux;
+      disp[s.b * 2 + 1] += uy;
+    }
+    for (let i = 0; i < n; i++) {
+      disp[i * 2] += (seeds[i][0] - pos[i][0]) * ANCHOR;
+      disp[i * 2 + 1] += (seeds[i][1] - pos[i][1]) * ANCHOR;
     }
 
-    const temp = 0.09 * (1 - it / iters) + 0.004;
+    // Linear cool-down; the settle passes move almost nothing.
+    const temp = it < ITERS ? k * 0.6 * (1 - it / ITERS) + 0.02 : 0.4;
     for (let i = 0; i < n; i++) {
-      const dx = disp[i * 3];
-      const dy = disp[i * 3 + 1];
-      const dz = disp[i * 3 + 2];
-      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const dx = disp[i * 2];
+      const dy = disp[i * 2 + 1];
+      const d = Math.sqrt(dx * dx + dy * dy);
       if (d < 1e-9) continue;
       const step = Math.min(d, temp) / d;
-      let x = pos[i][0] + dx * step;
-      let y = pos[i][1] + dy * step;
-      let z = pos[i][2] + dz * step;
-      const len = Math.sqrt(x * x + y * y + z * z);
-      if (len < 1e-9) {
-        pos[i] = seedPos(list[i].key);
-        continue;
-      }
-      x /= len;
-      y /= len;
-      z /= len;
-      pos[i] = [x, y, z];
+      pos[i] = [
+        clamp(pos[i][0] + dx * step, 1, W - 1),
+        clamp(pos[i][1] + dy * step, 2, H - 2),
+      ];
     }
+  }
+
+  // Normalise the settled cloud onto the full grid: a per-axis min/max fit, so
+  // the picture covers the pane instead of sitting in a centred ellipse. One
+  // cell of padding each side keeps glyphs and labels off the frame edge.
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of pos) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const x0 = 1;
+  const x1 = Math.max(1, cols - 2);
+  const y0 = 2;
+  const y1 = Math.max(2, (rows - 2) * 2);
+  const sx = maxX - minX > 1e-6 ? (x1 - x0) / (maxX - minX) : 0;
+  const sy = maxY - minY > 1e-6 ? (y1 - y0) / (maxY - minY) : 0;
+  for (let i = 0; i < n; i++) {
+    pos[i] = [
+      sx ? x0 + (pos[i][0] - minX) * sx : (cols - 1) / 2,
+      sy ? y0 + (pos[i][1] - minY) * sy : rows - 1,
+    ];
   }
 
   list.forEach((node, i) => out.set(node.key, pos[i]));
   return out;
 }
 
-export type Projected = { col: number; row: number; depth: number };
+let memo: { sig: string; pos: Map<string, Vec2> } | null = null;
 
-/** Cheap sphere -> grid projection. `depth` is -1 (far) .. 1 (near). */
-export function project(
-  p: readonly [number, number, number],
-  angle: number,
+/**
+ * Payload signature: node count, edge/link counts, the keys themselves and the
+ * pane size. `phase`, `focus` and glyphs never enter it.
+ */
+function payloadSig(
+  list: AsciiNode[],
+  edges: AsciiEdge[],
+  similar: AsciiLink[],
   cols: number,
   rows: number,
-): Projected {
-  const c = Math.cos(angle);
-  const s = Math.sin(angle);
-  const x = p[0] * c - p[2] * s;
-  const z = p[0] * s + p[2] * c;
-  const persp = 1 / (2.3 - z * 0.85);
-  const sx = clamp(x * persp * 2.9, -1, 1);
-  const sy = clamp(p[1] * persp * 2.1, -1, 1);
+): string {
+  let h = 7;
+  for (const n of list) h = (Math.imul(h, 31) + hashKey(n.key)) | 0;
+  return `${list.length}:${edges.length}:${similar.length}:${cols}x${rows}:${h}`;
+}
+
+/** One relaxation per payload; every later frame reuses the cells. */
+function cachedLayout(
+  list: AsciiNode[],
+  edges: AsciiEdge[],
+  similar: AsciiLink[],
+  cols: number,
+  rows: number,
+): Map<string, Vec2> {
+  const sig = payloadSig(list, edges, similar, cols, rows);
+  if (memo && memo.sig === sig) return memo.pos;
+  memo = { sig, pos: layout(list, edges, similar, cols, rows) };
+  return memo.pos;
+}
+
+export type Projected = { col: number; row: number };
+
+/** World cells -> grid cell. `y` is halved because a cell is about 2:1. */
+export function cellOf(p: Vec2, cols: number, rows: number): Projected {
   return {
-    col: clampInt(Math.round(((cols - 1) / 2) * (1 + sx)), 0, cols - 1),
-    row: clampInt(Math.round(((rows - 1) / 2) * (1 + sy)), 0, rows - 1),
-    depth: z,
+    col: clampInt(Math.round(p[0]), 0, cols - 1),
+    row: clampInt(Math.round(p[1] / 2), 0, rows - 1),
   };
 }
 
@@ -321,11 +365,6 @@ function clampInt(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-/** Middle value of an unsorted list (averaged pair at even length). */
-function median(xs: number[]): number {
-  const s = [...xs].sort((a, b) => a - b);
-  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-}
 
 // --- DEV guards ------------------------------------------------------------
 
@@ -346,7 +385,6 @@ class CellBuf {
   private ch: string[];
   private role: Role[];
   private taken: Uint8Array;
-  private used = new Set<Role>();
 
   constructor(cols: number, rows: number) {
     this.cols = cols;
@@ -379,16 +417,9 @@ class CellBuf {
     const i = this.idx(col, row);
     this.ch[i] = ch;
     this.role[i] = role;
-    this.used.add(role);
   }
 
-  /** Mark a cell as spoken for without writing it (node cells, before edges). */
-  reserve(col: number, row: number): void {
-    if (!this.inside(col, row, 'coord')) return;
-    this.taken[this.idx(col, row)] = 1;
-  }
-
-  /** Occupy-once write for edges. First writer wins; false if the cell is gone. */
+  /** Occupy-once write for lines. First writer wins; false if the cell is gone. */
   claim(col: number, row: number, ch: string, role: Role): boolean {
     if (!this.inside(col, row, 'coord')) return false;
     const i = this.idx(col, row);
@@ -396,13 +427,43 @@ class CellBuf {
     this.taken[i] = 1;
     this.ch[i] = ch;
     this.role[i] = role;
-    this.used.add(role);
     return true;
   }
 
-  render(): { text: string; overlays: { role: Role; text: string }[] } {
+  /** Upgrade an already-claimed line cell to a junction. */
+  cross(col: number, row: number): boolean {
+    if (!this.inside(col, row, 'coord')) return false;
+    const i = this.idx(col, row);
+    if (!LINE_GLYPHS.includes(this.ch[i])) return false;
+    this.ch[i] = '+';
+    return true;
+  }
+
+  /**
+   * Render one frame. `phase` moves the brightness band only: the band is a
+   * diagonal stripe `col + row*2`, and cells within `BAND_HALF` of it are
+   * lifted (`faint` -> `amber`, everything else -> `ink`). Glyphs and
+   * positions never depend on it, so the stripped frame is identical at every
+   * phase.
+   */
+  render(phase: number): { text: string; overlays: { role: Role; text: string }[] } {
+    const span = this.cols + this.rows * 2;
+    const band = (((phase * 12) % span) + span) % span;
+    const n = this.cols * this.rows;
+    const eff: Role[] = new Array(n);
+    const used = new Set<Role>();
+    for (let i = 0; i < n; i++) {
+      const col = i % this.cols;
+      const row = (i - col) / this.cols;
+      let d = Math.abs(col + row * 2 - band);
+      if (d > span / 2) d = span - d;
+      const r = this.role[i];
+      eff[i] = d > BAND_HALF ? r : r === 'faint' ? 'amber' : 'ink';
+      used.add(eff[i]);
+    }
+
     const lines: string[] = new Array(this.rows);
-    const active = OVERLAY_ROLES.filter((r) => this.used.has(r));
+    const active = OVERLAY_ROLES.filter((r) => used.has(r));
     const layers = new Map<Role, string[]>();
     for (const r of active) layers.set(r, new Array(this.rows));
 
@@ -413,7 +474,7 @@ class CellBuf {
       for (let col = 0; col < this.cols; col++) {
         const i = row * this.cols + col;
         const ch = this.ch[i];
-        const role = this.role[i];
+        const role = eff[i];
         line[col] = ch;
         for (const r of active) parts.get(r)![col] = role === r ? ch : ' ';
       }
@@ -436,60 +497,47 @@ function nodeRole(n: AsciiNode): Role {
 }
 
 /**
- * How loudly a node should read: degree leads, then uses, then score. Kept in
- * [0,1] so the sub-letter tiers below stay visibly graded even when the graph
- * is sparse and most degrees are small.
+ * Degree-sized glyph: a hub is obvious before any line is read.
+ * Hubs (degree >= 4) are a 2x2 block of `█`, drawn by `drawNodes`.
  */
-function prominence(n: AsciiNode): number {
-  const d = Math.min(1, n.degree / 6);
-  const u = Math.min(1, Math.log1p(Math.max(0, n.uses)) / Math.log1p(50));
-  const s = clamp(n.score, 0, 1);
-  return 0.55 * d + 0.3 * u + 0.15 * s;
-}
-
 function nodeGlyph(n: AsciiNode): string {
-  if (n.degree >= 3) return TYPE_GLYPH[n.type] ?? '@';
-  const p = prominence(n);
-  if (p >= 0.55) return 'o';
-  if (p >= 0.3) return '+';
-  return '.';
+  if (n.degree >= 2) return '●';
+  if (n.degree >= 1) return '•';
+  return '·';
 }
 
-function edgeGlyph(dx: number, dy: number): string {
-  const ax = Math.abs(dx);
-  const ay = Math.abs(dy);
-  if (ax >= ay * 1.8) return '-';
-  if (ay >= ax * 1.8) return '|';
-  return (dx > 0) === (dy > 0) ? '\\' : '/';
+/** Label text: the tail of the key after the last dot, or the key itself. */
+function labelOf(key: string): string {
+  const dot = key.lastIndexOf('.');
+  return dot >= 0 && dot < key.length - 1 ? key.slice(dot + 1) : key;
 }
 
 // --- drawing ---------------------------------------------------------------
 
-/** Returns the number of cells this edge actually claimed. */
-function drawEdge(
-  buf: CellBuf,
-  a: Projected,
-  b: Projected,
-  e: AsciiEdge,
-): number {
+/**
+ * Straight segment: one glyph per step, horizontal `-`, vertical `|`, diagonal
+ * `/` `\`, and `+` where the cell already holds a line. Returns cells inked.
+ */
+function drawLine(buf: CellBuf, a: Projected, b: Projected, role: Role, step: number): number {
   const dx = b.col - a.col;
   const dy = b.row - a.row;
   const len = Math.max(Math.abs(dx), Math.abs(dy));
   if (len < MIN_EDGE_LEN) return 0;
-  const role = REL_ROLE[e.rel] ?? 'faint';
-  const contradicts = e.rel === 'contradicts';
-  // Heavy edges are continuous backbone; light ones are dust. A strand that
-  // cannot overwrite anything stays a strand instead of becoming fill.
-  const solid = e.weight >= 1;
-  const step = solid ? 1 : e.weight >= 0.5 ? 2 : 3;
-  const glyph = solid || contradicts ? edgeGlyph(dx, dy) : '.';
   let written = 0;
-  for (let i = 0; i <= len; i += step) {
+  let pc = a.col;
+  let pr = a.row;
+  for (let i = 1; i < len; i += step) {
     const t = i / len;
     const col = Math.round(a.col + dx * t);
     const row = Math.round(a.row + dy * t);
-    const ch = contradicts && i % 4 === 0 ? 'x' : glyph;
-    if (buf.claim(col, row, ch, contradicts ? 'coral' : role)) written++;
+    if (col === pc && row === pr) continue;
+    const ddx = col - pc;
+    const drow = row - pr;
+    pc = col;
+    pr = row;
+    const ch = drow === 0 ? '-' : ddx === 0 ? '|' : ddx > 0 === drow > 0 ? '\\' : '/';
+    if (buf.claim(col, row, ch, role)) written++;
+    else if (buf.cross(col, row)) written++;
   }
   return written;
 }
@@ -497,7 +545,7 @@ function drawEdge(
 /**
  * Static, hash-seeded texture drawn under the data when there are too few real
  * edges to be a picture. It is NOT data: it never varies with `edges` or
- * `angle`, and it does not claim cells, so real strands draw over it.
+ * `phase`, and it does not claim cells, so real strands draw over it.
  */
 function drawBackdrop(buf: CellBuf, cols: number, rows: number): void {
   for (let row = 0; row < rows; row++) {
@@ -524,7 +572,7 @@ function synthField(): AsciiNode[] {
       status: 'current',
       uses: Math.floor(r() * 12),
       score: r(),
-      degree: Math.floor(r() * 5),
+      degree: Math.floor(r() * 6),
     });
   }
   return out;
@@ -532,22 +580,17 @@ function synthField(): AsciiNode[] {
 
 function selectNodes(nodes: AsciiNode[]): AsciiNode[] {
   if (nodes.length <= MAX_NODES) return nodes;
-  return [...nodes]
-    .sort((a, b) => b.degree - a.degree || b.uses - a.uses)
-    .slice(0, MAX_NODES);
+  return [...nodes].sort((a, b) => b.degree - a.degree || b.uses - a.uses).slice(0, MAX_NODES);
 }
 
 function dimLine(count: number, cols: number): string {
-  const t =
-    count > 0
-      ? `memo graph - ${count} nodes (grid too small)`
-      : 'memo graph - no data';
+  const t = count > 0 ? `memo graph - ${count} nodes (grid too small)` : 'memo graph - no data';
   return t.slice(0, Math.max(0, cols));
 }
 
 /**
  * Nearest free cell: rings of cells around `p`, closest first, so a cluster
- * that projects onto one cell still shows three glyphs instead of one.
+ * that lands on one cell still shows three glyphs instead of one.
  */
 const SPIRAL: [number, number][] = (() => {
   const out: [number, number][] = [];
@@ -563,40 +606,25 @@ const SPIRAL: [number, number][] = (() => {
   return out.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
 })();
 
-function place(
-  taken: Set<number>,
-  p: Projected,
-  cols: number,
-  rows: number,
-): Projected {
+function place(taken: Set<number>, p: Projected, cols: number, rows: number): Projected {
   if (!taken.has(p.row * cols + p.col)) return p;
   for (const [dx, dy] of SPIRAL) {
     const col = p.col + dx;
     const row = p.row + dy;
     if (col < 0 || row < 0 || col >= cols || row >= rows) continue;
     if (taken.has(row * cols + col)) continue;
-    return { col, row, depth: p.depth };
+    return { col, row };
   }
   return p; // every ring taken: the node keeps the shared cell
 }
 
-/** A `similar` pair drawn as a strand: dotted dust, or solid when focused. */
-function linkEdge(l: AsciiLink, solid: boolean): AsciiEdge {
-  return {
-    src_key: l.src_key,
-    dst_key: l.dst_key,
-    rel: 'similar',
-    weight: solid ? 1 : 0.5,
-  };
-}
-
 export type FrameOptions = {
-  /** Cosine neighbour pairs; dotted strands under the declared edges. */
+  /** Cosine neighbour pairs; faint strands under the declared edges. */
   similar?: AsciiLink[];
   /** A memory key: draw it and its neighbours, dim the rest. */
   focus?: string | null;
   /** Precomputed `layout()`; recomputed here only when omitted. */
-  pos?: Map<string, Vec3>;
+  pos?: Map<string, Vec2>;
 };
 
 /** One frame. Pure: identical args -> identical output. */
@@ -605,7 +633,7 @@ export function buildFrame(
   edges: AsciiEdge[],
   cols: number,
   rows: number,
-  angle: number,
+  phase: number,
   opts: FrameOptions = {},
 ): Frame {
   if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 8 || rows < 4) {
@@ -639,30 +667,9 @@ export function buildFrame(
   const focused = lights.size > 0;
   const near = (key: string): boolean => !focused || lights.has(key);
 
-  const points = opts.pos ?? layout(list, edges, similar);
+  const points = opts.pos ?? cachedLayout(list, edges, similar, cols, rows);
 
-  // Ink centring, two deterministic translations: the centre of mass goes to
-  // the origin, then a median-cell translation puts the mass in the middle of
-  // the pane. The median is robust: clamped outliers cannot drag it.
-  const midC = (cols - 1) / 2;
-  const midR = (rows - 1) / 2;
-  const raw0 = list.map((n) => project(points.get(n.key) ?? seedPos(n.key), angle, cols, rows));
-  const meanC = raw0.reduce((s, p) => s + p.col, 0) / raw0.length;
-  const meanR = raw0.reduce((s, p) => s + p.row, 0) / raw0.length;
-  const comMap = raw0.map((p) => ({
-    col: Math.round(midC + p.col - meanC),
-    row: Math.round(midR + p.row - meanR),
-    depth: p.depth,
-  }));
-  const medC = median(comMap.map((p) => p.col));
-  const medR = median(comMap.map((p) => p.row));
-  const shiftC = Math.round(midC - medC);
-  const shiftR = Math.round(midR - medR);
-  const raw = comMap.map((p) => ({
-    col: clampInt(p.col + shiftC, 0, cols - 1),
-    row: clampInt(p.row + shiftR, 0, cols - 1),
-    depth: p.depth,
-  }));
+  const raw = list.map((n) => cellOf(points.get(n.key) ?? seedPos(n, cols, rows), cols, rows));
 
   // Cells, nudged off each other so a cluster never hides a node.
   const taken = new Set<number>();
@@ -675,7 +682,7 @@ export function buildFrame(
 
   const ordered = list
     .map((n) => ({ n, p: pos.get(n.key)! }))
-    .sort((a, b) => a.p.depth - b.p.depth || a.n.degree - b.n.degree);
+    .sort((a, b) => a.n.degree - b.n.degree);
 
   const buf = new CellBuf(cols, rows);
 
@@ -686,24 +693,24 @@ export function buildFrame(
     return { a, b, len: Math.max(Math.abs(b.col - a.col), Math.abs(b.row - a.row)) };
   };
 
-  type Strand = { e: AsciiEdge; a: Projected; b: Projected; len: number };
-  /** A strand taller than the pane is a scratch, shorter than 3 cells is noise. */
-  const maxLen = rows * STRAND_RATIO;
-  const fits = (s: { len: number }) => s.len >= MIN_EDGE_LEN && s.len <= maxLen;
+  type Strand = { a: Projected; b: Projected; len: number };
+  /** A line across the frame is a scratch, shorter than 3 cells is noise. */
+  const maxLen = rows * LINE_RATIO;
+  const fits = (s: { len: number }, max = maxLen) => s.len >= MIN_EDGE_LEN && s.len <= max;
 
   // Declared edges that survive selection and focus, long enough to read.
-  const edgeStrands = edges
+  const edgeStrands: (Strand & { role: Role })[] = edges
     .filter((e) => present.has(e.src_key) && present.has(e.dst_key))
     .filter((e) => near(e.src_key) && near(e.dst_key))
     .map((e) => {
       const s = strand(e.src_key, e.dst_key);
-      return s ? { e, ...s } : null;
+      return s ? { ...s, role: REL_ROLE[e.rel] ?? 'faint' } : null;
     })
-    .filter((s): s is Strand => s !== null && fits(s));
+    .filter((s): s is Strand & { role: Role } => s !== null && fits(s));
 
-  // Similarity link pass: ranked by score, undirected pairs count once, each
-  // node keeps at most its top-2, and only local, short strands survive.
-  const linkStrands: (Strand & { score: number })[] = [];
+  // Similarity pass: ranked by score, undirected pairs count once, each node
+  // keeps at most its top-2, and only local, short strands survive.
+  const linkStrands: Strand[] = [];
   {
     const seen = new Set<string>();
     const perNode = new Map<string, number>();
@@ -717,11 +724,11 @@ export function buildFrame(
       if ((perNode.get(l.src_key) ?? 0) >= SIMILAR_PER_NODE) continue;
       if ((perNode.get(l.dst_key) ?? 0) >= SIMILAR_PER_NODE) continue;
       const s = strand(l.src_key, l.dst_key);
-      if (!s || !fits(s)) continue;
+      if (!s || !fits(s, rows)) continue; // only genuinely local pairs
       seen.add(pair);
       perNode.set(l.src_key, (perNode.get(l.src_key) ?? 0) + 1);
       perNode.set(l.dst_key, (perNode.get(l.dst_key) ?? 0) + 1);
-      linkStrands.push({ e: linkEdge(l, focused), score: l.score, ...s });
+      linkStrands.push(s);
     }
   }
 
@@ -729,27 +736,88 @@ export function buildFrame(
   const sparse = edgeStrands.length === 0 && linkStrands.length === 0;
   if (sparse) drawBackdrop(buf, cols, rows);
 
-  // Nodes claim their cells, then write their glyphs, then claim a 1-cell
-  // halo; strands draw last and can never cross a glyph or a halo.
-  for (const { p } of ordered) buf.reserve(p.col, p.row);
+  // Ink hierarchy: lines first, so a node or a label always wins the cell.
+  for (const s of linkStrands) drawLine(buf, s.a, s.b, 'faint', SIMILAR_STEP);
+  for (const s of edgeStrands) drawLine(buf, s.a, s.b, s.role, 1);
+
+  // Nodes: a hub is a 2x2 block (all four cells claimed, else a single `●`),
+  // everybody else one glyph sized by degree. Node cells never collide.
+  const occupied = new Set<number>();
+  const isHub = (n: AsciiNode): boolean => n.degree >= 4;
   for (const { n, p } of ordered) {
     const lit = near(n.key);
-    buf.set(p.col, p.row, lit ? nodeGlyph(n) : '.', lit ? nodeRole(n) : 'faint');
-  }
-  for (const { p } of ordered) {
-    let n = 0;
-    for (const [dx, dy] of HALO) {
-      if (n >= HALO_MAX) break;
-      if (buf.claim(p.col + dx, p.row + dy, ':', 'faint')) n++;
+    const ch = lit ? nodeGlyph(n) : '.';
+    const role = lit ? nodeRole(n) : 'faint';
+    let block = false;
+    if (lit && isHub(n) && p.col + 1 < cols && p.row + 1 < rows) {
+      block = true;
+      for (const [dc, dr] of [
+        [1, 0],
+        [0, 1],
+        [1, 1],
+      ]) {
+        if (occupied.has((p.row + dr) * cols + p.col + dc)) {
+          block = false;
+          break;
+        }
+      }
+    }
+    if (block) {
+      for (const [dc, dr] of [
+        [0, 0],
+        [1, 0],
+        [0, 1],
+        [1, 1],
+      ]) {
+        buf.set(p.col + dc, p.row + dr, '█', role);
+        occupied.add((p.row + dr) * cols + p.col + dc);
+      }
+    } else {
+      buf.set(p.col, p.row, ch, role);
+      occupied.add(p.row * cols + p.col);
     }
   }
-  for (const s of edgeStrands) drawEdge(buf, s.a, s.b, s.e);
-  for (const s of linkStrands) drawEdge(buf, s.a, s.b, s.e);
 
-  const { text, overlays } = buf.render();
+  // Labels on hubs: one row, one space to the right of the glyph, faint so
+  // they never compete with the dots. A label is claimed whole or skipped
+  // whole — no half words.
+  const hubs = ordered
+    .filter(({ n }) => n.degree >= LABEL_DEGREE && near(n.key))
+    .sort((a, b) => b.n.degree - a.n.degree || (a.n.key < b.n.key ? -1 : 1));
+  for (const { n, p } of hubs) {
+    const start = p.col + (isHub(n) ? 3 : 2);
+    const room = cols - start;
+    if (room < 2) continue;
+    const text = labelOf(n.key).slice(0, room);
+    if (!text) continue;
+    let ok = true;
+    for (let i = 0; i < text.length; i++) {
+      const i2 = p.row * cols + start + i;
+      if (occupied.has(i2)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    if (!occupied.has(p.row * cols + start - 1)) buf.set(start - 1, p.row, ' ', 'faint');
+    for (let i = 0; i < text.length; i++) {
+      buf.set(start + i, p.row, text[i], 'faint');
+      occupied.add(p.row * cols + start + i);
+    }
+  }
+
+  const { text, overlays } = buf.render(phase);
   const hits: HitBox[] = synthetic
     ? []
     : ordered.map(({ n, p }) => ({ key: n.key, col: p.col, row: p.row }));
 
   return { text, overlays, hits, dim: false, sparse };
 }
+
+
+
+
+
+
+
+
