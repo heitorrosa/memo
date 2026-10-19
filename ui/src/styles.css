@@ -3,27 +3,27 @@
 /* Tokens are frozen by the swarm contract (_contract.md §5). Dark only; they
    are CSS vars so a light theme stays possible later. */
 @theme {
-  --color-bg: #0b0a09;
-  --color-surface: #12100e;
-  --color-surface-2: #171411;
-  --color-line: #2b2622;
-  --color-line-soft: #201c19;
-  --color-ink: #ece6da;
-  --color-muted: #a29a8b;
-  --color-faint: #6d665c;
-  --color-amber: #e0a52c;
-  --color-amber-dim: #7a5a17;
-  --color-coral: #e2603f;
-  --color-green: #7fa650;
-  --color-blue: #6f9ec4;
-  --color-violet: #a585c9;
+  --color-bg: #111214;
+  --color-surface: #17191c;
+  --color-surface-2: #1d2024;
+  --color-line: #272c32;
+  --color-line-soft: #1e2226;
+  --color-ink: #e6ebf0;
+  --color-muted: #98a2ab;
+  --color-faint: #6b767f;
+  --color-amber: #7aa2f7;
+  --color-amber-dim: #3d5a8a;
+  --color-coral: #e06c75;
+  --color-green: #6fbf73;
+  --color-blue: #56b6c2;
+  --color-violet: #a78bfa;
 
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @layer base {
   :root {
-    --hair: color-mix(in srgb, var(--color-ink) 3%, transparent);
+    --hair: color-mix(in srgb, var(--color-ink) 4%, transparent);
   }
 
   html,
@@ -45,7 +45,7 @@
     text-rendering: geometricPrecision;
   }
 
-  /* Fixed hairline technical grid, 124px cells at 3% of --ink. */
+  /* Fixed hairline technical grid, 124px cells at 4% of --ink (pure black floor). */
   body::before {
     content: "";
     position: fixed;
@@ -55,6 +55,19 @@
     background-image:
       repeating-linear-gradient(90deg, var(--hair) 0 1px, transparent 1px 124px),
       repeating-linear-gradient(0deg, var(--hair) 0 1px, transparent 1px 124px);
+  }
+
+  /* Grain plate: grey noise over a dark grey ground (not pure black), sits under
+     #root so text never gets textured. */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.085;
+    mix-blend-mode: screen;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
   }
 
   #root {
@@ -82,8 +95,9 @@
     outline-offset: -1px;
   }
 
+  /* One warm spot in a cold field — coral stays selection only. */
   ::selection {
-    background: var(--color-amber);
+    background: var(--color-coral);
     color: var(--color-bg);
   }
 

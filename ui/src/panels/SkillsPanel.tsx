@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Chip } from "../components/Chip";
 import { KeyValue } from "../components/KeyValue";
-import { Line, Panel, SearchBar, SectionHead, type PanelProps } from "../components/Panel";
+import { Line, Panel, SearchBar, SectionHead, Hints, type PanelProps } from "../components/Panel";
 import { Table, type Column } from "../components/Table";
 import { useAsync, type AsyncState } from "../hooks/useAsync";
 import { useHotkeys } from "../hooks/useHotkeys";
@@ -202,9 +202,37 @@ export function SkillsPanel({
             />
           ) : null}
         </Panel>
-        <p className="microlabel shrink-0 border-t border-line-soft px-3 py-1">
-          {selected ? "j k move · enter open · e patch" : "no skill selected · j k move · enter open"}
-        </p>
+        <Hints
+          items={[
+            ...(selected ? [] : [{ key: "", label: "no skill selected" }]),
+            { key: "j k", label: "move" },
+            {
+              key: "enter",
+              label: "open",
+              disabled: !selected,
+              onPress: () => focus(index < 0 ? 0 : index),
+            },
+            {
+              key: "e",
+              label: "patch",
+              disabled: !selected || editing,
+              onPress: () => {
+                setPatch("");
+                setEditing(true);
+              },
+            },
+            ...(editing ? [{ key: "enter", label: "apply", disabled: saving, onPress: apply }] : []),
+            {
+              key: "esc",
+              label: "close",
+              disabled: !selected,
+              onPress: () => {
+                setEditing(false);
+                onSelect(null);
+              },
+            },
+          ]}
+        />
       </div>
 
       {open ? (
@@ -287,9 +315,6 @@ function SkillDetail({ state }: { state: AsyncState<{ skill: Skill } | null> }) 
           { label: "updated", value: text(skill.updated_at) },
         ]}
       />
-      <p className="microlabel mt-2">
-        revision history is not served by this API — see the list row’s revision count
-      </p>
     </article>
   );
 }

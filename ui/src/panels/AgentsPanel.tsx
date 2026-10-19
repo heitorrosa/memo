@@ -1,5 +1,5 @@
 import { KeyValue } from "../components/KeyValue";
-import { Line, Panel, SectionHead, type PanelProps } from "../components/Panel";
+import { Line, Panel, SectionHead, Hints, type PanelProps } from "../components/Panel";
 import { Table, type Column } from "../components/Table";
 import { useAsync, type AsyncState } from "../hooks/useAsync";
 import { useHotkeys } from "../hooks/useHotkeys";
@@ -124,9 +124,19 @@ export function AgentsPanel({
             />
           ) : null}
         </Panel>
-        <p className="microlabel shrink-0 border-t border-line-soft px-3 py-1">
-          {selected ? "j k move · enter open" : "no agent selected · j k move · enter open"}
-        </p>
+        <Hints
+          items={[
+            ...(selected ? [] : [{ key: "", label: "no agent selected" }]),
+            { key: "j k", label: "move" },
+            {
+              key: "enter",
+              label: "open",
+              disabled: !selected,
+              onPress: () => focus(index < 0 ? 0 : index),
+            },
+            { key: "esc", label: "close", disabled: !selected, onPress: () => onSelect(null) },
+          ]}
+        />
       </div>
 
       {open ? (

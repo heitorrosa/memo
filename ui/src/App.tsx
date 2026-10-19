@@ -38,8 +38,8 @@ function RailButton({
       type="button"
       onClick={onClick}
       aria-current={active}
-      className={`flex w-full items-baseline gap-2 px-3 py-0.5 ${
-        active ? "text-amber" : "text-muted hover:text-ink"
+      className={`flex w-full items-center gap-2.5 rounded-[2px] px-3.5 py-2.5 transition-colors duration-150 ${
+        active ? "bg-surface-2 text-amber" : "text-muted hover:bg-surface/70 hover:text-ink"
       }`}
     >
       <span aria-hidden="true" className={active ? undefined : "invisible"}>
@@ -48,10 +48,14 @@ function RailButton({
       <span aria-hidden="true" className="text-line">
         {connector}
       </span>
-      <span className="microlabel" style={active ? { color: "var(--color-amber)" } : undefined}>
-        {label}
+      <span className="microlabel text-inherit text-[11.5px]">{label}</span>
+      <span
+        className={`tabular microlabel ml-auto text-[10.5px] ${
+          active ? "text-amber" : "text-faint"
+        }`}
+      >
+        {count}
       </span>
-      <span className="tabular microlabel ml-auto">{count}</span>
     </button>
   );
 }
@@ -170,34 +174,36 @@ export default function App() {
   return (
     <Frame>
       <div className="grid h-full grid-rows-[minmax(0,1fr)]">
-        <div className="grid min-h-0 grid-cols-[200px_minmax(0,1fr)]">
+        <div className="grid min-h-0 grid-cols-[264px_minmax(0,1fr)]">
           <aside className="flex min-h-0 flex-col border-r border-line">
-            <div className="px-3 pt-3">
-              <Wordmark className="text-[9px] text-amber-dim" />
+            <div className="flex items-center justify-center border-b border-line-soft px-5 py-6">
+              <Wordmark className="text-[12px] text-amber" />
             </div>
 
-            <nav className="mt-5 flex flex-col">
-              {PANES.map((item, index) => (
-                <RailButton
-                  key={item.id}
-                  label={item.label}
-                  connector={index === PANES.length - 1 ? "└─" : "├─"}
-                  active={item.id === pane}
-                  onClick={() => setPane(item.id)}
-                  count={
-                    counts === null
-                      ? "·"
-                      : item.id === "memories"
-                        ? String(counts.memories)
-                        : item.id === "skills"
-                          ? String(counts.skills)
-                          : item.id === "agents"
-                            ? String(counts.agents)
-                            : `v${statsData?.version ?? 3}`
-                  }
-                />
-              ))}
-            </nav>
+            <div className="flex min-h-0 flex-1 items-center px-4 py-6">
+              <nav className="flex w-full flex-col gap-1.5">
+                {PANES.map((item, index) => (
+                  <RailButton
+                    key={item.id}
+                    label={item.label}
+                    connector={index === PANES.length - 1 ? "└─" : "├─"}
+                    active={item.id === pane}
+                    onClick={() => setPane(item.id)}
+                    count={
+                      counts === null
+                        ? "·"
+                        : item.id === "memories"
+                          ? String(counts.memories)
+                          : item.id === "skills"
+                            ? String(counts.skills)
+                            : item.id === "agents"
+                              ? String(counts.agents)
+                              : `v${statsData?.version ?? 3}`
+                    }
+                  />
+                ))}
+              </nav>
+            </div>
           </aside>
 
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
@@ -214,7 +220,7 @@ export default function App() {
                   : undefined
               }
             >
-              <div className="h-[12rem] overflow-hidden px-3 pb-1">
+              <div className="h-[clamp(12rem,30vh,22rem)] overflow-hidden px-3 pb-1">
                 {graph.state.status === "loading" ? (
                   <Line kind="loading">loading ...</Line>
                 ) : graph.state.status === "error" ? (

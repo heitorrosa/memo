@@ -17,14 +17,7 @@ export function AppPanel({ active, reloadSignal }: PanelProps) {
       }
     >
       <div className="min-h-0 border-r border-line pb-6">
-        <Panel
-          title="APP"
-          meta={
-            stats.state.status === "ready"
-              ? `memo v${stats.state.data.version}`
-              : undefined
-          }
-        >
+        <Panel title="APP">
           {stats.state.status === "loading" ? <Line kind="loading">loading ...</Line> : null}
           {stats.state.status === "error" ? (
             <Line kind="error">error: {stats.state.error}</Line>
@@ -102,9 +95,6 @@ function Breakdown({ stats }: { stats: Stats }) {
       <BarGroup title="by type" data={stats.by_type} colored />
       <BarGroup title="by status" data={stats.by_status} />
       <BarGroup title="by source" data={stats.by_source} />
-      <p className="microlabel mt-4">
-        bars are proportional to the largest value in each group
-      </p>
     </>
   );
 }

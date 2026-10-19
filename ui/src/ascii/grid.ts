@@ -96,28 +96,41 @@ const REL_ROLE: Record<string, Role> = {
   contradicts: 'coral',
   derived_from: 'violet',
   // similarity strands: texture, not a declared relation
-  similar: 'muted',
+  similar: 'faint',
 };
 
 const MAX_NODES = 200;
-/** Real-edge count below which the frame gets the backdrop texture. */
-const SPARSE_EDGES = 15;
-/** Fraction of the grid that edge strands may claim. */
-const EDGE_BUDGET = 0.2;
 /** Shortest projected edge worth drawing, in cells. */
 const MIN_EDGE_LEN = 3;
 /**
- * Similarity strands are local texture: only pairs this close on the sphere
- * (radians) get drawn. Longer ones cross the frame and read as noise.
- * shortcut: tuned at 96x14; revisit if the grid grows or clusters spread.
+ * Similarity strands are local texture: each node keeps at most its top-2
+ * links by score (undirected pairs count once), and a strand longer than the
+ * row height (STRAND_RATIO x rows) is dropped: it crosses the frame and
+ * reads as noise.
  */
-const SIMILAR_RANGE = 0.25;
+const SIMILAR_PER_NODE = 2;
+/** Longest allowed strand, as a multiple of the row height. */
+const STRAND_RATIO = 1.2;
 /**
- * Attraction per link. Every pair repels, so n^2 repulsion outguns a unit pull
- * and clusters smear across the frame; this keeps a link ahead of it. Declared
- * edges stay the strongest relation (weight 1, similarity <= its score).
+ * Attraction per link. Every pair repels (n^2 pairs, scaled by REPULSION) and
+ * each link pulls with weight x PULL; REPULSION is the tune's lever that keeps
+ * clusters 3-8 cells wide instead of 20. Declared edges stay the strongest
+ * relation (weight 1, similarity <= its score).
  */
-const PULL = 8;
+const PULL = 16;
+const REPULSION = 0.3;
+/**
+ * One ring of orthogonal cells around a node glyph, claimed as faint dust.
+ * Each node claims the first 2 halo cells it finds free: enough that a cluster
+ * reads as a blob, few enough that strands stay subordinate to nodes.
+ */
+const HALO_MAX = 2;
+const HALO: [number, number][] = [
+  [-1, 0],
+  [1, 0],
+  [0, -1],
+  [0, 1],
+];
 
 // --- determinism -----------------------------------------------------------
 
@@ -219,7 +232,7 @@ export function layout(
         const dy = pi[1] - pj[1];
         const dz = pi[2] - pj[2];
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1e-4;
-        const f = (k * k) / d; // repulsion
+        const f = ((k * k) / d) * REPULSION; // repulsion
         const ux = (dx / d) * f;
         const uy = (dy / d) * f;
         const uz = (dz / d) * f;
@@ -306,6 +319,12 @@ function clamp(v: number, lo: number, hi: number): number {
 
 function clampInt(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+/** Middle value of an unsorted list (averaged pair at even length). */
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 }
 
 // --- DEV guards ------------------------------------------------------------
@@ -452,12 +471,11 @@ function drawEdge(
   a: Projected,
   b: Projected,
   e: AsciiEdge,
-  budget: number,
 ): number {
   const dx = b.col - a.col;
   const dy = b.row - a.row;
   const len = Math.max(Math.abs(dx), Math.abs(dy));
-  if (len < MIN_EDGE_LEN || budget <= 0) return 0;
+  if (len < MIN_EDGE_LEN) return 0;
   const role = REL_ROLE[e.rel] ?? 'faint';
   const contradicts = e.rel === 'contradicts';
   // Heavy edges are continuous backbone; light ones are dust. A strand that
@@ -467,7 +485,6 @@ function drawEdge(
   const glyph = solid || contradicts ? edgeGlyph(dx, dy) : '.';
   let written = 0;
   for (let i = 0; i <= len; i += step) {
-    if (written >= budget) break;
     const t = i / len;
     const col = Math.round(a.col + dx * t);
     const row = Math.round(a.row + dy * t);
@@ -569,7 +586,7 @@ function linkEdge(l: AsciiLink, solid: boolean): AsciiEdge {
     src_key: l.src_key,
     dst_key: l.dst_key,
     rel: 'similar',
-    weight: solid ? 1 : 0.34,
+    weight: solid ? 1 : 0.5,
   };
 }
 
@@ -624,15 +641,37 @@ export function buildFrame(
 
   const points = opts.pos ?? layout(list, edges, similar);
 
+  // Ink centring, two deterministic translations: the centre of mass goes to
+  // the origin, then a median-cell translation puts the mass in the middle of
+  // the pane. The median is robust: clamped outliers cannot drag it.
+  const midC = (cols - 1) / 2;
+  const midR = (rows - 1) / 2;
+  const raw0 = list.map((n) => project(points.get(n.key) ?? seedPos(n.key), angle, cols, rows));
+  const meanC = raw0.reduce((s, p) => s + p.col, 0) / raw0.length;
+  const meanR = raw0.reduce((s, p) => s + p.row, 0) / raw0.length;
+  const comMap = raw0.map((p) => ({
+    col: Math.round(midC + p.col - meanC),
+    row: Math.round(midR + p.row - meanR),
+    depth: p.depth,
+  }));
+  const medC = median(comMap.map((p) => p.col));
+  const medR = median(comMap.map((p) => p.row));
+  const shiftC = Math.round(midC - medC);
+  const shiftR = Math.round(midR - medR);
+  const raw = comMap.map((p) => ({
+    col: clampInt(p.col + shiftC, 0, cols - 1),
+    row: clampInt(p.row + shiftR, 0, cols - 1),
+    depth: p.depth,
+  }));
+
   // Cells, nudged off each other so a cluster never hides a node.
   const taken = new Set<number>();
   const pos = new Map<string, Projected>();
-  for (const n of list) {
-    const raw = project(points.get(n.key) ?? seedPos(n.key), angle, cols, rows);
-    const cell = place(taken, raw, cols, rows);
+  list.forEach((n, i) => {
+    const cell = place(taken, raw[i], cols, rows);
     taken.add(cell.row * cols + cell.col);
     pos.set(n.key, cell);
-  }
+  });
 
   const ordered = list
     .map((n) => ({ n, p: pos.get(n.key)! }))
@@ -647,66 +686,65 @@ export function buildFrame(
     return { a, b, len: Math.max(Math.abs(b.col - a.col), Math.abs(b.row - a.row)) };
   };
 
+  type Strand = { e: AsciiEdge; a: Projected; b: Projected; len: number };
+  /** A strand taller than the pane is a scratch, shorter than 3 cells is noise. */
+  const maxLen = rows * STRAND_RATIO;
+  const fits = (s: { len: number }) => s.len >= MIN_EDGE_LEN && s.len <= maxLen;
+
   // Declared edges that survive selection and focus, long enough to read.
-  const strands = edges
+  const edgeStrands = edges
     .filter((e) => present.has(e.src_key) && present.has(e.dst_key))
     .filter((e) => near(e.src_key) && near(e.dst_key))
     .map((e) => {
       const s = strand(e.src_key, e.dst_key);
       return s ? { e, ...s } : null;
     })
-    .filter((s): s is { e: AsciiEdge; a: Projected; b: Projected; len: number } =>
-      s !== null && s.len >= MIN_EDGE_LEN,
-    );
+    .filter((s): s is Strand => s !== null && fits(s));
 
-  // Similarity strands are texture: read after the edges, never over a glyph.
-  const span = (a: string, b: string): number => {
-    const p = points.get(a);
-    const q = points.get(b);
-    if (!p || !q) return Infinity;
-    return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
-  };
-  const links = similar
-    .filter((l) => present.has(l.src_key) && present.has(l.dst_key))
-    .filter((l) => near(l.src_key) && near(l.dst_key))
-    .filter((l) => focused || span(l.src_key, l.dst_key) <= SIMILAR_RANGE)
-    .map((l) => {
+  // Similarity link pass: ranked by score, undirected pairs count once, each
+  // node keeps at most its top-2, and only local, short strands survive.
+  const linkStrands: (Strand & { score: number })[] = [];
+  {
+    const seen = new Set<string>();
+    const perNode = new Map<string, number>();
+    const ranked = [...similar]
+      .filter((l) => present.has(l.src_key) && present.has(l.dst_key))
+      .filter((l) => near(l.src_key) && near(l.dst_key))
+      .sort((x, y) => y.score - x.score);
+    for (const l of ranked) {
+      const pair = l.src_key < l.dst_key ? `${l.src_key}>${l.dst_key}` : `${l.dst_key}>${l.src_key}`;
+      if (seen.has(pair)) continue;
+      if ((perNode.get(l.src_key) ?? 0) >= SIMILAR_PER_NODE) continue;
+      if ((perNode.get(l.dst_key) ?? 0) >= SIMILAR_PER_NODE) continue;
       const s = strand(l.src_key, l.dst_key);
-      return s ? { e: linkEdge(l, focused), score: l.score, ...s } : null;
-    })
-    .filter((s): s is { e: AsciiEdge; a: Projected; b: Projected; len: number; score: number } =>
-      s !== null && s.len >= MIN_EDGE_LEN,
-    );
+      if (!s || !fits(s)) continue;
+      seen.add(pair);
+      perNode.set(l.src_key, (perNode.get(l.src_key) ?? 0) + 1);
+      perNode.set(l.dst_key, (perNode.get(l.dst_key) ?? 0) + 1);
+      linkStrands.push({ e: linkEdge(l, focused), score: l.score, ...s });
+    }
+  }
 
-  const sparse = strands.length < SPARSE_EDGES;
+  // `sparse` is honest: the backdrop only appears when nothing at all survives.
+  const sparse = edgeStrands.length === 0 && linkStrands.length === 0;
   if (sparse) drawBackdrop(buf, cols, rows);
 
-  // Nodes first reserve their cells so no strand can run through a glyph.
+  // Nodes claim their cells, then write their glyphs, then claim a 1-cell
+  // halo; strands draw last and can never cross a glyph or a halo.
   for (const { p } of ordered) buf.reserve(p.col, p.row);
-
-  // Budget is spent on cells, not on the node count, and in weight order.
-  const budget = Math.max(8, Math.round(cols * rows * EDGE_BUDGET));
-  let spent = 0;
-  const byWeight = [...strands].sort(
-    (x, y) => y.e.weight - x.e.weight || x.a.depth + x.b.depth - (y.a.depth + y.b.depth),
-  );
-  for (const s of byWeight) {
-    if (spent >= budget) break;
-    spent += drawEdge(buf, s.a, s.b, s.e, budget - spent);
-  }
-  const byScore = [...links].sort(
-    (x, y) => y.score - x.score || x.a.depth + x.b.depth - (y.a.depth + y.b.depth),
-  );
-  for (const s of byScore) {
-    if (spent >= budget) break;
-    spent += drawEdge(buf, s.a, s.b, s.e, budget - spent);
-  }
-
-  // Nodes last, unconditional: they always win their own cell.
   for (const { n, p } of ordered) {
     const lit = near(n.key);
     buf.set(p.col, p.row, lit ? nodeGlyph(n) : '.', lit ? nodeRole(n) : 'faint');
   }
+  for (const { p } of ordered) {
+    let n = 0;
+    for (const [dx, dy] of HALO) {
+      if (n >= HALO_MAX) break;
+      if (buf.claim(p.col + dx, p.row + dy, ':', 'faint')) n++;
+    }
+  }
+  for (const s of edgeStrands) drawEdge(buf, s.a, s.b, s.e);
+  for (const s of linkStrands) drawEdge(buf, s.a, s.b, s.e);
 
   const { text, overlays } = buf.render();
   const hits: HitBox[] = synthetic

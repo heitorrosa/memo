@@ -40,26 +40,43 @@ the invisible focusable hit-boxes when `onSelect` is passed.
 - Node glyph: `P/A/F/C` by memory type at degree ≥ 3, else `o` / `+` / `.` by
   prominence (below). Colour by type (amber/violet/coral/blue); superseded
   nodes go faint.
-- Edge glyph: `-` `|` `/` `\` by slope; `contradicts` edges mark every 4th cell
-  `x` in coral, `supports` green, `derived_from` violet, `mentions` faint.
-- Depth sorting: far edges and far nodes are drawn first.
+- Every node claims a **halo**: the first 2 free orthogonal cells around its
+  glyph (`HALO_MAX`), written `:` in faint, after the glyphs and before any
+  strand, so a cluster of related nodes reads as a blob and strands can never
+  cross a glyph or a halo.
+- Similarity strands: dotted (step 2) `.` dust in faint; focus-incident strands
+  draw solid. Declared edges: `-` `|` `/` `\` by slope; `contradicts` marks
+  every 4th cell `x` in coral, `supports` green, `derived_from` violet,
+  `mentions` faint.
+- Drawing order: any backdrop, then node cells (reserved, then glyphs, then
+  halos), then declared edges, then similarity strands. Strand ink ends up
+  clearly subordinate to node ink (frame-check measures it per angle).
 
 ### Where nodes sit
 
 `layout(nodes, edges, similar)` returns a 3D point per key on the unit sphere,
 seeded from `seedPos(key)` and relaxed with Fruchterman-Reingold: every pair
-repels (`k²/d`), every link pulls (`d²/k · w · PULL`), each step is capped by a
-cooling temperature, and every point is renormalised to the sphere. Link weight
-is `score` for a `similar` pair and `1` for a declared edge, so declared edges
-stay the strongest relation. `PULL` exists because n² repulsion otherwise outguns
-a unit pull and clusters smear across the frame.
+repels (`k²/d · REPULSION`), every link pulls (`d²/k · w · PULL`), each step is
+capped by a cooling temperature, and every point is renormalised to the sphere.
+Link weight is `score` for a `similar` pair and `1` for a declared edge, so
+declared edges stay the strongest relation. `PULL` (16) vs `REPULSION` (0.3) are
+the two levers that keep clusters 3-8 cells wide instead of 20.
 
-Two calibrations keep the 96×14 grid readable:
+Two calibrations keep a 243x22 frame readable (fixture: 137 nodes, per-type
+ring+skip links, 4 declared edges):
 
-- `SIMILAR_RANGE` (0.25 rad): strands longer than this are not drawn. They cross
-  the frame and read as noise. Focus-incident strands are exempt.
-- Neighbour pairs therefore land a few cells apart, and clusters separate
-  (fixture: mean intra 0.30 vs cross 1.15 in 3D).
+- `SIMILAR_PER_NODE` (2): every node keeps at most its top-2 links by score
+  (undirected pairs count once), so at most ~n strands exist no matter how many
+  links the server sends.
+- `STRAND_RATIO` (1.2): a strand longer than the row height x 1.2 is dropped —
+  it crosses the frame and reads as noise (frame-check: intra 0.83 vs cross
+  1.39 in 3D; neighbours project closer at all 16 rotations, worst 3.86x).
+
+The layout is a **rotating** field, not a stable chart: only the caller's
+`angle` moves, `layout()` never re-runs per frame, and the frame is re-centred
+every redraw by two deterministic translations — centre of mass to the origin,
+then a median-cell translation so the mass sits in the middle of the pane (the
+median is robust against clamped outliers).
 
 No `Math.random`, no time input. `hits`, `dim` and the overlay contract are
 unchanged. `Stage.tsx` memoises the result on the payload signature.
@@ -74,17 +91,17 @@ memory, and what it is close to".
 
 ### Three rules that keep it legible
 
-1. **Budget by cells, not by node count.** Strands may claim at most
-   `cols * rows * 0.20` cells, spent in `weight` desc order for declared edges
-   and then in `score` desc order for `similar` strands, from one shared counter.
-   On 96×14 that is ~268 cells (~14 strands), which is all a 14-row grid can
-   hold. Once the budget is gone the remaining strands are simply not drawn.
+1. **Strands are rare and short.** Candidate `similar` pairs are ranked by
+   score, deduped undirected, and capped at 2 per node (`SIMILAR_PER_NODE`); a
+   strand longer than `STRAND_RATIO x rows` is dropped. Declared edges draw
+   first; no shared cell budget — the length cap and the per-node tally are
+   what bound the ink.
 2. **Occupy-once.** An edge can never overwrite a written cell (first writer
-   wins) and node cells are *reserved* before any edge is drawn, so no strand
-   runs through a glyph. Edges shorter than 3 projected cells are skipped. Node
-   cells themselves are de-duplicated: a node that lands on a taken cell walks a
-   spiral of up to 3 rings to the nearest free one, so a cluster never hides a
-   node, and `hits` stays unique per key.
+   wins) and node cells are *claimed* — glyph then halo — before any strand is
+   drawn, so no strand runs through a glyph or halo. Edges shorter than 3
+   projected cells are skipped. Node cells themselves are de-duplicated: a node
+   that lands on a taken cell walks a spiral of up to 3 rings to the nearest
+   free one, so a cluster never hides a node, and `hits` stays unique per key.
 3. **Prominence grading.** `prominence = 0.55·degree + 0.30·log(uses) + 0.15·score`
    gives the sub-letter tier (`o` at ≥ 0.55, `+` at ≥ 0.30, `.` below) so a
    sparse graph of low-degree nodes still reads as a *graded* field rather than
@@ -92,9 +109,10 @@ memory, and what it is close to".
 
 ## Degrading honestly
 
-- **Sparse mode (fewer than 15 real edges survive, including 0 nodes).** When
-  there are too few relations to be a picture — the live database holds ~137
-  memories and ~12 edges — the frame gets a faint **static backdrop texture**:
+- **Sparse mode (only when nothing survives).** When neither a declared edge
+  nor a similarity strand survives selection and the length cap — 0 nodes, no
+  data, or everything filtered out — the frame gets a faint **static backdrop
+  texture**:
   hash-seeded `:` hairlines every 12 columns plus scattered `.` dust. It is
   **texture, not data**: it never varies with `edges` or `angle`, it does not
   claim cells, and it invents no node-to-node links. A decorative graph would be

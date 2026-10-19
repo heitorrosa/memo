@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Chip } from "../components/Chip";
 import { KeyValue } from "../components/KeyValue";
-import { Line, Panel, SearchBar, SectionHead, type PanelProps } from "../components/Panel";
+import { Line, Panel, SearchBar, SectionHead, Hints, type PanelProps } from "../components/Panel";
 import { Prompt } from "../components/Prompt";
 import { Table, type Column } from "../components/Table";
 import { useAsync, type AsyncState } from "../hooks/useAsync";
@@ -333,11 +333,35 @@ export function MemoriesPanel({
             />
           ) : null}
         </Panel>
-        <p className="microlabel shrink-0 border-t border-line-soft px-3 py-1">
-          {selected
-            ? "j k move · enter open · d delete · n new · esc close"
-            : "no memory selected · j k move · enter open · n new"}
-        </p>
+        <Hints
+          items={[
+            ...(selected ? [] : [{ key: "", label: "no memory selected" }]),
+            { key: "j k", label: "move" },
+            {
+              key: "enter",
+              label: "open",
+              disabled: !selected,
+              onPress: () => focus(index < 0 ? 0 : index),
+            },
+            {
+              key: "n",
+              label: "new",
+              onPress: () => {
+                setDraft(EMPTY_DRAFT);
+                setComposing(true);
+              },
+            },
+            {
+              key: "d",
+              label: "delete",
+              disabled: !selected,
+              onPress: () => {
+                if (selected) setConfirming(true);
+              },
+            },
+            { key: "esc", label: "close", disabled: !selected, onPress: dismiss },
+          ]}
+        />
       </div>
 
       {open ? (

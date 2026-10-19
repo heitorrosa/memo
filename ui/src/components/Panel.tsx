@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from "react";
+import type { ReactElement, ReactNode, RefObject } from "react";
 
 export interface PanelProps {
   /** Pane is the visible one; inactive panes stay mounted to keep their state. */
@@ -108,6 +108,62 @@ export function SearchBar({
           clear
         </button>
       ) : null}
+    </div>
+  );
+}
+
+export type Hint = {
+  /** Empty string renders the label alone — for the leading state item. */
+  key: string;
+  label: string;
+  onPress?: () => void;
+  disabled?: boolean;
+  title?: string;
+};
+
+/**
+ * Footer hint row. An item with `onPress` is a real button (the mouse twin of
+ * its hotkey); one without stays plain text, which is how a pure keybinding
+ * like `j k move` remains informational.
+ */
+export function Hints({ items }: { items: Hint[] }): ReactElement {
+  return (
+    <div className="microlabel flex shrink-0 flex-wrap items-center gap-x-1 gap-y-0.5 border-t border-line-soft px-3 py-1">
+      {items.map((item, position) => {
+        const face = item.key ? (
+          <>
+            <span aria-hidden="true">[{item.key}]</span> {item.label}
+          </>
+        ) : (
+          item.label
+        );
+        return (
+          <span key={`${item.key}:${item.label}:${position}`} className="flex items-center gap-x-1">
+            {position > 0 ? (
+              <span aria-hidden="true" className="text-faint/60">
+                ·
+              </span>
+            ) : null}
+            {item.onPress ? (
+              <button
+                type="button"
+                disabled={item.disabled}
+                title={item.title}
+                onClick={item.onPress}
+                className={`whitespace-nowrap px-1 ${
+                  item.disabled
+                    ? "cursor-default text-faint/60"
+                    : "text-muted hover:bg-surface-2 hover:text-amber focus-visible:bg-surface-2 focus-visible:text-amber"
+                }`}
+              >
+                {face}
+              </button>
+            ) : (
+              <span className="whitespace-nowrap">{face}</span>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }
