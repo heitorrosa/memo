@@ -16,7 +16,7 @@ logs l:
 ui:
 	cd ui && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)
 	cd ui && npm run build
-	mkdir -p src/memo/static/ui && cp -r ui/dist/. src/memo/static/ui/
+	python -c "import shutil; shutil.copytree('ui/dist', 'src/memo/static/ui', dirs_exist_ok=True)"
 
 ui-dev:
 	cd ui && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)
