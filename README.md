@@ -106,6 +106,14 @@ make docker-build        # build the image
 pytest tests/ -q
 ```
 
+### Layout
+
+- `src/memo/server/api/` - the dashboard HTTP layer (FastAPI): `__init__` builds the app, `models` holds the pydantic models, and `memories`, `skills`, `agents`, `graph`, `stats` register their own routes.
+- `src/memo/server/http.py` - the bearer wrapper, `/health`, the `/ui` mount and the MCP mount.
+- `src/memo/memory/`, `src/memo/skills/`, `src/memo/models/` - the domain: writing, searching, the graph and the skill store.
+- `ui/` - the dashboard (Vite, React, TypeScript, Tailwind); `ui/src/ascii/` draws the graph.
+- `scripts/` - `backfill_graph.py` fills the edges and aliases of older memories, `fetch_model.py` pre-fetches the weights.
+
 ## License
 
 GPL-3.0-only. See [`LICENSE`](LICENSE).
