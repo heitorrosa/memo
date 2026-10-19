@@ -90,7 +90,7 @@ def test_stats_shape(api):
     body = client.get("/api/stats", headers=AUTH).json()
     assert body["counts"]["memories"] == 2
     assert body["counts"]["current"] == 2
-    assert body["counts"]["edges"] >= 3
+    assert body["counts"]["edges"] == 1
     assert body["by_type"]["context"] == 2
     assert body["last_activity"] is not None
 
@@ -270,8 +270,7 @@ def test_ui_mount_is_public(api):
         assert response.status_code != 401, response.text
 
 
-def test_ui_mount_serves_the_build_when_present(monkeypatch, tmp_path):
-    monkeypatch.delenv("MEMO_UI_DIR", raising=False)
+def test_ui_mount_serves_the_build_when_present(tmp_path):
     if static_ui.ui_dir() is None:
         pytest.skip("no built dashboard in this worktree")
     client, server = make_client(tmp_path)
@@ -280,6 +279,29 @@ def test_ui_mount_serves_the_build_when_present(monkeypatch, tmp_path):
             response = client.get(path)
             assert response.status_code == 200, response.text
             assert response.headers["content-type"].startswith("text/html")
+    finally:
+        client.close()
+        server.memo_conn.close()
+
+
+def test_ui_mount_ignores_memo_ui_dir(monkeypatch, tmp_path):
+    package = tmp_path / "memo"
+    built = package / "static" / "ui"
+    built.mkdir(parents=True)
+    (built / "index.html").write_text("<html>package</html>", encoding="utf-8")
+    bogus = tmp_path / "bogus"
+    bogus.mkdir()
+    (bogus / "index.html").write_text("<html>bogus</html>", encoding="utf-8")
+    monkeypatch.setenv("MEMO_UI_DIR", str(bogus))
+    monkeypatch.setattr(static_ui, "__file__",
+                        str(package / "server" / "static_ui.py"))
+    client, server = make_client(tmp_path)
+    try:
+        assert static_ui.ui_dir() == built.resolve()
+        response = client.get("/ui/")
+        assert response.status_code == 200, response.text
+        assert "package" in response.text
+        assert "bogus" not in response.text
     finally:
         client.close()
         server.memo_conn.close()

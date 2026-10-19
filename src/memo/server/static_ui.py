@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from starlette.responses import RedirectResponse
@@ -11,13 +10,9 @@ NOT_BUILT = "dashboard not built - run 'make ui'"
 
 
 def ui_dir() -> Path | None:
-    candidates = []
-    configured = os.getenv("MEMO_UI_DIR")
-    if configured:
-        candidates.append(Path(configured))
     package = Path(__file__).resolve().parent.parent
-    candidates.append(package / "static" / "ui")
-    candidates.append(Path.cwd() / "src" / "memo" / "static" / "ui")
+    candidates = [package / "static" / "ui",
+                  Path.cwd() / "src" / "memo" / "static" / "ui"]
     for candidate in candidates:
         if (candidate / "index.html").is_file():
             return candidate

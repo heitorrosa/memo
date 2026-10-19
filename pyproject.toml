@@ -23,14 +23,14 @@ memo = "memo.server:main"
 dev = ["pytest>=8"]
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=62.3"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-memo = ["prompts.json"]
+memo = ["prompts.json", "static/ui/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -13,15 +13,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src/ src/
+COPY --from=ui /ui/dist src/memo/static/ui
 RUN pip install --no-cache-dir . fastembed uvicorn fastapi
+RUN python -c "import memo, os, pathlib; os.symlink(pathlib.Path(memo.__file__).parent / 'static' / 'ui', '/app/ui')"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends nginx \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /etc/nginx/sites-enabled/default
-
-COPY --from=ui /ui/dist /app/ui
-ENV MEMO_UI_DIR=/app/ui
 
 ENV HF_HUB_DISABLE_SYMLINKS=1
 RUN python -c "from fastembed import TextEmbedding; \
