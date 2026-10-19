@@ -156,7 +156,6 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
     if min_score is not None:
         scored = [result for result in scored if result["score"] >= min_score]
     scored = rank.order(scored)[:limit]
-    touch_now = temporal.now_iso()
     peewee_db = memo_db.orm_db(conn)
     with peewee_db.bind_ctx(orm_models.MODELS), peewee_db.atomic():
         for result in scored:
@@ -164,7 +163,7 @@ def search(conn: sqlite3.Connection, query: str, limit: int = 10,
             new_stability = result["stab"] if result["status"] != "current" or retention < R_FLOOR else min(
                 result["stab"] * (1.0 + BETA * retention), S_CAP_X * STABILITY[result["type"]])
             (OrmMemory.update(score=OrmMemory.score * 1.1, uses=OrmMemory.uses + 1,
-                              stability=new_stability, updated_at=touch_now)
+                              stability=new_stability)
              .where((OrmMemory.key == result["key"]) & (OrmMemory.namespace == namespace))
              .execute())
             result.pop("stab"), result.pop("age"), result.pop("status")

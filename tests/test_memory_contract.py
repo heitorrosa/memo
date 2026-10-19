@@ -103,6 +103,26 @@ def test_type_and_min_score_filters(tmp_path):
     conn.close()
 
 
+def test_read_path_never_rewrites_updated_at(tmp_path):
+    conn = mem(tmp_path)
+    save(conn, "atlas.note", "durable atlas project note alpha")
+    stamp = conn.execute(
+        "SELECT COUNT(*), MAX(updated_at) FROM memories"
+        " WHERE namespace='default'").fetchone()
+    hits = search(conn, "atlas project note")
+    assert hits and hits[0]["key"] == "atlas.note"
+    assert conn.execute(
+        "SELECT COUNT(*), MAX(updated_at) FROM memories"
+        " WHERE namespace='default'").fetchone() == stamp
+    assert conn.execute(
+        "SELECT uses FROM memories WHERE key='atlas.note'").fetchone()[0] == 1
+    save(conn, "atlas.note", "durable atlas project note beta")
+    moved = conn.execute(
+        "SELECT MAX(updated_at) FROM memories WHERE namespace='default'").fetchone()[0]
+    assert moved > stamp[1]
+    conn.close()
+
+
 def test_writer_stamp(tmp_path):
     conn = mem(tmp_path)
     writer_a, writer_b = "a1" * 16, "b2" * 16

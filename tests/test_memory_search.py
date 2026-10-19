@@ -112,6 +112,35 @@ def test_touch_once(tmp_path):
     conn.close()
 
 
+def test_search_does_not_rewrite_updated_at(tmp_path):
+    conn = mem(tmp_path)
+    save(conn, "editor.indent", "prefers tabs", type="preference")
+    before = conn.execute(
+        "SELECT uses, updated_at FROM memories WHERE key='editor.indent'"
+    ).fetchone()
+    hits = search(conn, "editor tabs")
+    assert hits and hits[0]["key"] == "editor.indent"
+    after = conn.execute(
+        "SELECT uses, updated_at FROM memories WHERE key='editor.indent'"
+    ).fetchone()
+    assert after[0] == before[0] + 1
+    assert after[1] == before[1]
+    assert hits[0]["updated_at"] == before[1]
+    conn.close()
+
+
+def test_save_moves_updated_at(tmp_path):
+    conn = mem(tmp_path)
+    save(conn, "editor.indent", "prefers tabs", type="preference")
+    first = conn.execute(
+        "SELECT updated_at FROM memories WHERE key='editor.indent'").fetchone()[0]
+    save(conn, "editor.indent", "prefers spaces", type="preference")
+    second = conn.execute(
+        "SELECT updated_at FROM memories WHERE key='editor.indent'").fetchone()[0]
+    assert second > first
+    conn.close()
+
+
 def test_limit_cap(tmp_path):
     conn = mem(tmp_path)
     for i in range(3):
