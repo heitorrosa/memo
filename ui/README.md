@@ -3,15 +3,16 @@
 Vite + React 19 + TypeScript + Tailwind v4 + `motion`, built as a TUI: mono only,
 box-drawing, hairlines, no icon library, no web fonts, no CDN.
 
-The built bundle lands in `../src/memo/static/ui` (gitignored) and the memo
-server serves it at `/ui/`.
+The build lands in `ui/dist` (gitignored). The docker image ships it at
+`/app/ui` and the memo server serves the same files at `/ui/`; `make ui` copies
+it to `../src/memo/static/ui` for a run outside docker.
 
 ## Run
 
 ```sh
 npm install --no-audit --no-fund
 npm run dev        # http://localhost:5173/ui/ , /api proxied to :5000
-npm run build      # tsc -b && vite build  ->  ../src/memo/static/ui
+npm run build      # tsc -b && vite build  ->  ./dist
 npm run preview    # serves the build on :4173 (also proxies /api)
 ```
 
