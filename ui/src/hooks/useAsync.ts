@@ -6,10 +6,6 @@ export type AsyncState<T> =
   | { status: "error"; error: string }
   | { status: "ready"; data: T };
 
-/**
- * One request per dependency change. `reload()` bumps an internal counter, so
- * panels can refetch after a write without juggling keys.
- */
 export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[]) {
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -31,7 +27,6 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[]) {
     return () => {
       live = false;
     };
-    // deps are the caller's query tuple; tick is the refresh signal.
   }, [...deps, tick]);
 
   const reload = useCallback(() => setTick((value) => value + 1), []);

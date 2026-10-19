@@ -14,7 +14,6 @@ export function Wordmark({ className = "" }: { className?: string }) {
   );
 }
 
-/** Outermost chrome: the corner glyphs that make the viewport read as a box. */
 export function Frame({ children }: { children: ReactNode }) {
   return (
     <div className="relative h-full overflow-hidden bg-bg">

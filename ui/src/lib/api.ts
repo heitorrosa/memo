@@ -1,12 +1,6 @@
-/**
- * memo HTTP client — typed against the frozen swarm contract §3.
- * native fetch only: no axios, no react-query.
- */
 
 const TOKEN_KEY = "memo.token";
 const NAMESPACE = "default";
-
-/* ---------------------------------------------------------------- types -- */
 
 export interface Counts {
   memories: number;
@@ -104,11 +98,9 @@ export interface MemoryDetail {
   aliases: Alias[];
   family: FamilyRow[];
   declarers: Declarer[];
-  /** Optional: older servers do not send it. */
   related?: RelatedMemory[];
 }
 
-/** A close neighbour by embedding, not a declared relation. */
 export interface RelatedMemory {
   key: string;
   type: string;
@@ -182,7 +174,6 @@ export interface GraphEdge {
   weight: number;
 }
 
-/** Cosine neighbour pair. Optional: older servers do not send it. */
 export interface GraphLink {
   src_key: string;
   dst_key: string;
@@ -223,12 +214,9 @@ export interface SaveMemoryPayload {
   valid_until?: string;
 }
 
-/** Write helpers answer with the do_* result verbatim: shape is server-owned. */
 export interface WriteResult {
   [key: string]: unknown;
 }
-
-/* --------------------------------------------------------------- errors -- */
 
 export class ApiError extends Error {
   readonly status: number;
@@ -241,8 +229,6 @@ export class ApiError extends Error {
     this.code = code;
   }
 }
-
-/* ---------------------------------------------------------- token state -- */
 
 let token = "";
 let unauthorized: (() => void) | null = null;
@@ -261,7 +247,6 @@ export function onUnauthorized(fn: (() => void) | null): void {
   unauthorized = fn;
 }
 
-/** `?token=` is consumed once on load, then dropped from the address bar. */
 export function tokenFromUrl(): string {
   const url = new URL(location.href);
   const found = url.searchParams.get("token");
@@ -270,8 +255,6 @@ export function tokenFromUrl(): string {
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   return found;
 }
-
-/* ------------------------------------------------------------- plumbing -- */
 
 function parseJson(text: string): unknown {
   if (!text) return undefined;
@@ -323,8 +306,6 @@ function qs(params: Record<string, string | number | undefined | null>): string 
   const encoded = search.toString();
   return encoded ? `?${encoded}` : "";
 }
-
-/* ------------------------------------------------------------- read API -- */
 
 export function getStats(): Promise<Stats> {
   return req<Stats>("/api/stats");
@@ -423,9 +404,6 @@ export function getGraph(limit = 200, namespace: string = NAMESPACE): Promise<Gr
   return req<Graph>(`/api/graph${qs({ limit, namespace })}`);
 }
 
-/* ------------------------------------------------------------ UX helpers -- */
-
-/** A write answered with `{"error": ...}` (200/500 body) still counts as failed. */
 export function writeFailed(result: WriteResult): string | null {
   const err = result["error"];
   if (typeof err === "string") return err;

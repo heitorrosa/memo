@@ -1,24 +1,3 @@
-/**
- * Login-gate ascii logo mask + the pure frame function behind it.
- *
- * FORMAT — to swap in a real logo (e.g. derived from an SVG by thresholding):
- *   '#' = spine (outline, drawn at full accent)
- *   '+' = body (fill, drawn dimmer)
- *   '.' = hole (transparent)
- * Rows may be ragged; the renderer pads them to the widest row and centres the
- * block. The map is scaled to the viewport grid by one uniform integer factor,
- * so keep it wide: about 6 cols per row here reads as ~3:1 on screen at the
- * 0.6em mono advance. Nothing else needs to change: paste the rows, keep the
- * legend.
- *
- * SOURCE — the current map is the repo emblem, converted verbatim from
- * C:\Users\Administrator\Documents\Repositories\memo\assets\memo-ascii.txt
- * (rows 26-62, columns 43-109 trimmed window): U+2588 (solid) -> '#',
- * U+2591 (light shade) -> '+', space -> '.'. 37 rows x 66 cols.
- *
- * Everything here is pure and seeded — no Math.random, no DOM — so the same
- * phase always paints the same frame (see scripts/l10-art-check.mjs).
- */
 
 export const LOGO_MASK: string[] = [
   '........................+++#+++....+++#++++.......................',
@@ -63,31 +42,22 @@ export const LOGO_MASK: string[] = [
 export const MASK_ROWS = LOGO_MASK.length;
 export const MASK_COLS = Math.max(...LOGO_MASK.map((row) => row.length));
 
-/** Mask cells settle in over this window on mount. */
 export const SETTLE_MS = 1100;
-/** One scan pass every this many milliseconds. */
 export const SWEEP_MS = 6000;
-/** Mono advance width in em — the grid geometry depends on it. */
 export const CELL_W = 0.6;
 
 const TAU = Math.PI * 2;
-/** Half-width of the scan band, in grid cells. */
 const BAND = 5;
-/** Visual slope of the diagonal sweep (cells are ~0.6:1, so 1.7 reads as 45°). */
 const SLOPE = 1.7;
 
 export type Frame = {
-  /** Every visible cell, at the dim tier. */
   text: string;
-  /** Only the cells inside the scan band; same dimensions as `text`. */
   hot: string;
   cols: number;
   rows: number;
-  /** Number of ink cells (mask cells x scale^2), for the cell budget check. */
   ink: number;
 };
 
-/** Seeded hash in [0,1): one step of mulberry32 keyed by cell index. */
 function rand(i: number): number {
   let t = (i + 0x6d2b79f5) >>> 0;
   t = Math.imul(t ^ (t >>> 15), t | 1);
@@ -100,11 +70,6 @@ const isInk = (x: number, y: number): boolean => {
   return glyph === '#' || glyph === '+';
 };
 
-/**
- * Connected-glyph id per mask cell, flooded once at load. Cells of one glyph
- * share a drift orbit so a stroke never shears away from its letter — works for
- * any pasted mask without knowing where the letters are.
- */
 const GLYPH: number[] = (() => {
   const ids = new Array<number>(MASK_ROWS * MASK_COLS).fill(-1);
   let next = 0;
@@ -133,12 +98,6 @@ const GLYPH: number[] = (() => {
   return ids;
 })();
 
-/**
- * Paint one frame on a cols x rows character grid.
- *
- * @param phase  seconds since mount (drives orbit + sweep, both periodic)
- * @param reveal 0..1 settle progress; 1 = fully assembled
- */
 export function renderFrame(phase: number, cols: number, rows: number, reveal = 1): Frame {
   const W = Math.max(1, Math.floor(cols));
   const H = Math.max(1, Math.floor(rows));
@@ -162,7 +121,6 @@ export function renderFrame(phase: number, cols: number, rows: number, reveal = 
       if (glyph !== '#' && glyph !== '+') continue;
 
       const cell = my * MASK_COLS + mx;
-      // Staggered assemble per cell, orbit per glyph.
       if (reveal < rand(cell * 4 + 1)) continue;
       const glyphId = GLYPH[cell];
       const period = 4 + rand(glyphId * 3 + 1) * 5;

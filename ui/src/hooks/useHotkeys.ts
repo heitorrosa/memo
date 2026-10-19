@@ -13,11 +13,6 @@ function isTyping(target: EventTarget | null): boolean {
   );
 }
 
-/**
- * Window-level bindings keyed by `event.key`. Ignored while the event target is
- * a form field, so typing never fires a hotkey. `enabled` lets a pane yield to
- * an overlay.
- */
 export function useHotkeys(
   bindings: Record<string, HotkeyHandler>,
   enabled = true,
@@ -41,7 +36,6 @@ export function useHotkeys(
   }, [enabled, allowInInput]);
 }
 
-/** Locks window focus onto an element for as long as it is mounted. */
 export function useAutoFocus<T extends HTMLElement>(active = true) {
   const ref = useRef<T | null>(null);
   useEffect(() => {

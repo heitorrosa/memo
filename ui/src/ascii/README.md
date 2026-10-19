@@ -9,7 +9,6 @@ export type AsciiNode = { key: string; type: string; status: string; uses: numbe
 export type AsciiEdge = { src_key: string; dst_key: string; rel: string; weight: number };
 export type AsciiLink = { src_key: string; dst_key: string; score: number };
 export function AsciiStage(props: { nodes: AsciiNode[]; edges: AsciiEdge[]; similar?: AsciiLink[]; focus?: string | null; cols?: number; rows?: number; fps?: number; className?: string; onSelect?: (key: string) => void }): ReactElement;
-export function AsciiBanner(props: { text?: string; className?: string }): ReactElement;
 ```
 
 That is the whole contract. Nothing here imports another package or another
@@ -24,8 +23,6 @@ repo file: `react` only, plus these files.
 - `Stage.tsx` — one `requestAnimationFrame` loop, redraws at `fps` (default 12),
   `phase` advances with time. `layout()` is memoised on the payload signature
   (node count, edge count, link count, key hash), never on `phase` or `focus`.
-- `Banner.tsx` — a self-contained 5-row block font, typewriter reveal then a
-  single shimmer sweep, then it stops.
 
 ## The emblem, twice
 
@@ -199,7 +196,6 @@ No emoji. ASCII and box-drawing glyphs only.
 
 - Node colour is layered, not per-cell inline CSS; stacking order is the
   `OVERLAY_ROLES` order in `grid.ts`.
-- Hit-boxes refresh every 3rd redraw (~4/s) — they can lag a layout change by
+- Hit-boxes refresh every 3rd redraw (~4/s) - they can lag a layout change by
   one beat but never jitter.
-- `bannerRows` covers `A–Z 0–9 space - . : /`; anything else renders blank.
 

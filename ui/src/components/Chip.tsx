@@ -1,4 +1,3 @@
-/** Filter chip / toggle. Active colour is passed in (type or relation colour). */
 export function Chip({
   label,
   active,

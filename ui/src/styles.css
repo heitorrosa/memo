@@ -1,7 +1,5 @@
 @import "tailwindcss";
 
-/* Tokens are frozen by the swarm contract (_contract.md §5). Dark only; they
-   are CSS vars so a light theme stays possible later. */
 @theme {
   --color-bg: #111214;
   --color-surface: #17191c;
@@ -45,7 +43,6 @@
     text-rendering: geometricPrecision;
   }
 
-  /* Fixed hairline technical grid, 124px cells at 4% of --ink (pure black floor). */
   body::before {
     content: "";
     position: fixed;
@@ -57,8 +54,6 @@
       repeating-linear-gradient(0deg, var(--hair) 0 1px, transparent 1px 124px);
   }
 
-  /* Grain plate: grey noise over a dark grey ground (not pure black), sits under
-     #root so text never gets textured. */
   body::after {
     content: "";
     position: fixed;
@@ -95,7 +90,6 @@
     outline-offset: -1px;
   }
 
-  /* One warm spot in a cold field — coral stays selection only. */
   ::selection {
     background: var(--color-coral);
     color: var(--color-bg);
@@ -125,7 +119,6 @@
 }
 
 @layer components {
-  /* 10.5px uppercase micro-label, the only place tracking is used. */
   .microlabel {
     font-size: 10.5px;
     line-height: 1.4;
@@ -138,7 +131,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* One per viewport: a single faint scan over the ascii stage. */
   .scan {
     background-image: repeating-linear-gradient(
       0deg,

@@ -1,24 +1,16 @@
 import type { ReactElement, ReactNode, RefObject } from "react";
 
 export interface PanelProps {
-  /** Pane is the visible one; inactive panes stay mounted to keep their state. */
   active: boolean;
-  /** False while the keymap overlay owns the keyboard. */
   keys: boolean;
   selected: string | null;
   onSelect: (key: string | null) => void;
   onToast: (kind: "ok" | "err", text: string) => void;
-  /** Bumped by `r`; panels fold it into their request deps. */
   reloadSignal: number;
   searchRef: RefObject<HTMLInputElement | null>;
-  /** Refetch the shell counters after a write. */
   onStats: () => void;
 }
 
-/**
- * A titled region: `TITLE ──────── meta`. The leader rule is the divider —
- * no card, no shadow, no radius.
- */
 export function Panel({
   title,
   meta,
@@ -44,7 +36,6 @@ export function Panel({
   );
 }
 
-/** The only loading/empty/error rendering: one terse line, never a spinner. */
 export function Line({
   kind,
   children,
@@ -59,7 +50,6 @@ export function Line({
   return <p className={`px-3 py-1.5 ${tone} ${className}`}>{children}</p>;
 }
 
-/** Detail-sheet sub-heading: `TITLE ─────── meta`. */
 export function SectionHead({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
   return (
     <div className="mt-4 flex items-center gap-2 border-t border-line-soft pt-1">
@@ -70,7 +60,6 @@ export function SectionHead({ children, meta }: { children: ReactNode; meta?: Re
   );
 }
 
-/** The `/` search field every list pane shares. */
 export function SearchBar({
   inputRef,
   value,
@@ -94,8 +83,6 @@ export function SearchBar({
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key !== "Escape") return;
-          // Leave the field and drop the filter: otherwise a keyboard-only user
-          // can never reach n/d/? again — the field swallows every keystroke.
           event.preventDefault();
           event.currentTarget.blur();
           onChange("");
@@ -113,7 +100,6 @@ export function SearchBar({
 }
 
 export type Hint = {
-  /** Empty string renders the label alone — for the leading state item. */
   key: string;
   label: string;
   onPress?: () => void;
@@ -121,11 +107,6 @@ export type Hint = {
   title?: string;
 };
 
-/**
- * Footer hint row. An item with `onPress` is a real button (the mouse twin of
- * its hotkey); one without stays plain text, which is how a pure keybinding
- * like `j k move` remains informational.
- */
 export function Hints({ items }: { items: Hint[] }): ReactElement {
   return (
     <div className="microlabel flex shrink-0 flex-wrap items-center gap-x-1 gap-y-0.5 border-t border-line-soft px-3 py-1">

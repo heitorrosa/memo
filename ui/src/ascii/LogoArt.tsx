@@ -2,17 +2,9 @@ import { useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { CELL_W, SETTLE_MS, renderFrame } from './logo-mask';
 
-/**
- * Mask-driven ascii art behind the login gate. One rAF loop at 12fps writes
- * textContent on two <pre> layers (dim body, bright scan band) — React never
- * re-renders per frame. The mask lives in ./logo-mask.ts.
- */
-
 const FPS = 12;
-/** Grid cells to aim for at any viewport size (budget: <= 6000). */
 const TARGET_CELLS = 5200;
 
-/** Soft radial fade; the centre is dimmed further so the gate card stays readable. */
 const FADE =
   'radial-gradient(ellipse 72% 68% at 50% 48%, rgb(0 0 0 / 0.34) 0%, #000 50%, transparent 100%)';
 
@@ -48,8 +40,6 @@ export function LogoArt() {
     let cols = 0;
     let rows = 0;
 
-    // Grid sized to the viewport for TARGET_CELLS cells, then stretched by font
-    // size so the art is full-bleed. shortcut: assumes a 0.6em mono advance.
     const fit = () => {
       const w = dim.clientWidth || window.innerWidth || 1;
       const h = dim.clientHeight || window.innerHeight || 1;
@@ -69,7 +59,6 @@ export function LogoArt() {
     fit();
 
     if (prefersReduced()) {
-      // Final frame, no rAF at all.
       const still = () => {
         fit();
         paint(3, 1);

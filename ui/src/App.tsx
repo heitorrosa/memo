@@ -102,7 +102,6 @@ export default function App() {
   const [reloadSignal, setReloadSignal] = useState(0);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
-  // Any 401 during the session drops the token and brings the gate back.
   useEffect(() => {
     onUnauthorized(() => {
       setToken("");

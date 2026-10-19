@@ -2,16 +2,11 @@ import { useEffect, useRef, type ReactNode } from "react";
 
 export interface Column<T> {
   label: string;
-  /** CSS grid track; defaults to `minmax(0,1fr)`. */
   width?: string;
   align?: "left" | "right";
   render: (row: T) => ReactNode;
 }
 
-/**
- * Grid of real `<button>` rows: focusable, driven by j/k. Table semantics are
- * intentionally thin — the contract asks for buttons, not rows.
- */
 export function Table<T>({
   columns,
   rows,

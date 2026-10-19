@@ -1,7 +1,5 @@
 import { ApiError } from "./api";
 
-/* --------------------------------------------------------------- colour -- */
-
 export const TYPES = ["preference", "analysis", "feedback", "context"] as const;
 
 const TYPE_COLOR: Record<string, string> = {
@@ -39,13 +37,10 @@ export function relGlyph(rel: string): string {
   return REL_GLYPH[rel] ?? "·";
 }
 
-/* ----------------------------------------------------------------- time -- */
-
 const MINUTE = 60;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-/** Compact age: `12s`, `3m`, `5h`, `2d`, or a bare date once it is old. */
 export function relTime(iso: string | null | undefined): string {
   if (!iso) return "-";
   const ms = Date.parse(iso);
@@ -58,8 +53,6 @@ export function relTime(iso: string | null | undefined): string {
   if (secs < 30 * DAY) return `${Math.floor(secs / DAY)}d`;
   return iso.slice(0, 10);
 }
-
-/* --------------------------------------------------------------- scalars -- */
 
 export function bytes(size: number | null | undefined): string {
   if (size === null || size === undefined || !Number.isFinite(size)) return "-";
@@ -99,11 +92,8 @@ export function hash7(hash: string | null | undefined): string {
   return hash.slice(0, 7);
 }
 
-/* ------------------------------------------------------------------ bars -- */
-
 const EIGHTHS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 
-/** Block-glyph bar, proportional to `max`, padded with `·` to `width` cells. */
 export function bar(value: number, max: number, width = 24): string {
   const ceiling = max > 0 ? max : 1;
   const eighths = Number.isFinite(value)
@@ -115,8 +105,6 @@ export function bar(value: number, max: number, width = 24): string {
   const used = full + (partial ? 1 : 0);
   return "█".repeat(full) + partial + "·".repeat(Math.max(0, width - used));
 }
-
-/* --------------------------------------------------------------- errors -- */
 
 export function describeError(err: unknown): string {
   if (err instanceof ApiError) {

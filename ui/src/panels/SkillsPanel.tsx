@@ -88,7 +88,6 @@ export function SkillsPanel({
     if (item) onSelect(item.name);
   };
 
-  // The patch editor keeps focus in a textarea: its Escape bypasses the guard.
   useHotkeys({ Escape: () => setEditing(false) }, keys && editing, true);
 
   useHotkeys(
@@ -144,8 +143,6 @@ export function SkillsPanel({
       ? `${list.state.data.total} skills${committed ? ` · q "${clip(committed, 18)}"` : ""}`
       : undefined;
 
-  // Nothing selected: the detail column is dropped so the list gets the whole
-  // pane instead of paying ~300px for a blank sheet.
   const open = selected !== null;
 
   return (

@@ -1,10 +1,6 @@
 import { useEffect } from "react";
 import { useAutoFocus } from "../hooks/useHotkeys";
 
-/**
- * Inline `[y/N]` confirm. Takes the keyboard while it is mounted (no input
- * guard: the point is that a stray keystroke in a field cannot confirm).
- */
 export function Prompt({
   label,
   onYes,

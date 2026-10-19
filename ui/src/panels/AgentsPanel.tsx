@@ -57,7 +57,6 @@ export function AgentsPanel({
   reloadSignal,
 }: PanelProps) {
   const list = useAsync(() => listAgents(), [reloadSignal]);
-  // Only to spot a stale skill hash on the agent's side.
   const skills = useAsync(() => listSkills({ limit: 200 }), [reloadSignal]);
 
   const items = list.state.status === "ready" ? list.state.data.items : [];
@@ -84,8 +83,6 @@ export function AgentsPanel({
 
   const detail = items.find((agent) => agent.agent_id === selected) ?? null;
   const current = skills.state.status === "ready" ? skills.state.data.items : [];
-  // Nothing selected: the detail column is dropped so the list gets the whole
-  // pane instead of paying ~300px for a blank sheet.
   const open = selected !== null;
 
   return (

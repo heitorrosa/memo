@@ -64,22 +64,12 @@ const UPDATED_COL: Column<Memory> = {
   render: (memory) => relTime(memory.updated_at),
 };
 
-/**
- * USES and UPDATED go first, then TYPE, as the list narrows: KEY and VALUE are
- * what the pane is read for, and a key truncated to `pr…` is not a key.
- */
 function columnsFor(width: number): Column<Memory>[] {
   if (width >= 640) return [KEY_COL, TYPE_COL, VALUE_COL, USES_COL, UPDATED_COL];
   if (width >= 430) return [KEY_COL, TYPE_COL, VALUE_COL];
   return [KEY_COL, VALUE_COL];
 }
 
-/**
- * Live width of the list column, so the table can shed columns before cramping.
- * Measured on layout, not with a ResizeObserver: RO callbacks ride animation
- * frames, and a browser that paints no frames never delivers them. `when` is
- * `open` — the only state that changes the list column's width.
- */
 function useWidth<T extends HTMLElement>(when: boolean) {
   const ref = useRef<T | null>(null);
   const [width, setWidth] = useState(0);
@@ -121,8 +111,6 @@ export function MemoriesPanel({
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
-  // Nothing selected: the detail column is dropped so the list gets the whole
-  // pane instead of paying ~300px for a blank sheet.
   const open = selected !== null || composing;
   const [listRef, listWidth] = useWidth<HTMLDivElement>(open);
   const columns = columnsFor(listWidth);
@@ -163,8 +151,6 @@ export function MemoriesPanel({
     onSelect(null);
   };
 
-  // While a composer or a confirm is open the main bindings are off, and both
-  // keep focus inside fields — so dismissal needs the input guard bypassed.
   useHotkeys({ Escape: dismiss }, keys && (confirming || composing), true);
 
   useHotkeys(
@@ -247,8 +233,6 @@ export function MemoriesPanel({
     );
   };
 
-  // Enter saves from anywhere in the pane, not only from a field: the composer
-  // hint says `enter save`, so it has to be true wherever focus sits.
   useHotkeys(
     {
       Enter: () => {
@@ -502,7 +486,6 @@ function Detail({
         ))
       )}
 
-      {/* aliases are 0 rows on the live DB — the empty line is the normal case */}
       <SectionHead meta={aliases.length}>aliases</SectionHead>
       {aliases.length === 0 ? (
         <p className="text-faint">no aliases</p>
@@ -605,7 +588,6 @@ function Composer({
         }
         if (event.key !== "Enter" || event.shiftKey) return;
         const target = event.target as HTMLElement;
-        // links are one `rel:key` per line, so Enter there stays a newline
         if (target.id === "memory-links" || target.tagName === "BUTTON") return;
         if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") return;
         event.preventDefault();

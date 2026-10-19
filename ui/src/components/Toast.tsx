@@ -7,7 +7,6 @@ export interface ToastMsg {
   text: string;
 }
 
-/** Status-line flash shown for ~3s after a write (App owns the timer). */
 export function Toast({ toast }: { toast: ToastMsg }) {
   const isOk = toast.kind === "ok";
   return (

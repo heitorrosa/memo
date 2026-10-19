@@ -1,13 +1,3 @@
-// Frame check for the ASCII stage: no test runner, no dependencies.
-//   node --experimental-strip-types scripts/frame-check.mjs
-//
-// Two halves:
-//   1. structural checks on a synthetic live-shaped fixture (137 nodes,
-//      245 similar, 4 declared edges) at 243x22 — layout, phase contract,
-//      node cells, fills, labels, focus, sparse fallback;
-//   2. the ink-balance gate table on the REAL payload
-//      (.opencode/patches/graph-live.json, read off disk) at 94x22, 233x22
-//      and 233x14, asserting the gates in the L1 brief.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -23,8 +13,6 @@ const COLS = 243;
 const ROWS = 22;
 const TOTAL = COLS * ROWS + ROWS - 1;
 const NODE_GLYPHS = new Set(['■', '●', '•', '·', '.']);
-
-/* ------------------------------------------------------------- fixture -- */
 
 const nodes = [];
 const members = { preference: [], context: [], feedback: [], analysis: [] };
@@ -48,9 +36,6 @@ for (const [type, m] of [
   }
 }
 
-// Similarity is block-local (blocks of 8 inside one type) plus two hubs per
-// type, which is the shape a cosine-neighbour graph has. A ring per type would
-// be a ring on screen — the fixture must not lie about the topology.
 const similar = [];
 const seen = new Set();
 const link = (a, b, score) => {
@@ -73,7 +58,7 @@ for (const [type, keys] of Object.entries(members)) {
     if (i % 8 === 0) link(keys[i], hubs[i % hubs.length], 0.88);
   }
 }
-if (similar.length > 245) similar.length = 245; // live link count
+if (similar.length > 245) similar.length = 245;
 
 const edges = [
   { src_key: members.context[0], dst_key: members.context[30], rel: 'supports', weight: 1 },
@@ -98,7 +83,6 @@ const lines = (frame) => frame.text.split('\n');
 const at = (frame, row, col) => lines(frame)[row][col];
 const cell = (frame, key) => frame.hits.find((h) => h.key === key);
 
-/** Cells whose glyph differs between two frames — colour is not in `text`. */
 function diffCells(a, b) {
   const A = lines(a);
   const B = lines(b);
@@ -108,8 +92,6 @@ function diffCells(a, b) {
   }
   return d;
 }
-
-/* ----------------------------------------------------------- the layout -- */
 
 const points = layout(nodes, edges, similar, COLS, ROWS);
 assert.deepEqual(layout(nodes, edges, similar, COLS, ROWS), points);
@@ -138,8 +120,6 @@ const crossMean = mean(cross);
 assert.ok(intraMean < crossMean * 0.75, `type clusters overlap: ${intraMean.toFixed(1)} vs ${crossMean.toFixed(1)}`);
 ok(`same-type nodes gather (intra ${intraMean.toFixed(1)} vs cross ${crossMean.toFixed(1)} world cells)`);
 
-/* --------------------------------------------------- layout is frozen -- */
-
 const PHASES = [0.1, 1.4, 3.9];
 const frames = PHASES.map((p) => buildFrame(nodes, edges, COLS, ROWS, p, OPTS));
 for (let i = 1; i < frames.length; i++) {
@@ -147,10 +127,6 @@ for (let i = 1; i < frames.length; i++) {
 }
 ok(`phase ${PHASES.join('/')} -> 0 differing cells after stripping colour`);
 
-// ...while the brightness band really does move: cells must re-role.
-// Asserting one layer changes is brittle (which layer holds the band's cells
-// depends on the pane and the payload); the observable is that the phase
-// re-roles cells at all.
 const moved = (a, b) =>
   a.overlays.reduce((sum, o) => {
     const other = b.overlays.find((x) => x.role === o.role)?.text ?? "";
@@ -160,8 +136,6 @@ for (let i = 1; i < frames.length; i++) {
   assert.ok(moved(frames[0], frames[i]) >= 3, `band did not move: phase ${PHASES[0]} vs ${PHASES[i]}`);
 }
 ok('brightness band moves (faint + amber layers differ between phases)');
-
-/* ------------------------------------------------------------ the frame -- */
 
 const frame = frames[0];
 assert.equal(frame.text.length, TOTAL);
@@ -175,8 +149,6 @@ for (const layer of frame.overlays) {
 }
 ok(`frame + ${frame.overlays.length} overlays are exact ${COLS}x${ROWS} layers, cell for cell`);
 
-/* ------------------------------------------------------------ node cells -- */
-
 assert.equal(frame.hits.length, nodes.length, 'missing hit-boxes');
 assert.equal(new Set(frame.hits.map((h) => `${h.col},${h.row}`)).size, frame.hits.length, 'two nodes on one cell');
 let offGlyph = 0;
@@ -189,8 +161,6 @@ assert.equal(offBounds, 0, `${offBounds} node cells out of bounds`);
 assert.equal(offGlyph, 0, `${offGlyph} node cells do not hold a node glyph`);
 ok(`137 node cells: all in bounds, all hold a node glyph, none shared`);
 
-/* --------------------------------------------------------------- fills -- */
-
 const cols = frame.hits.map((h) => h.col);
 const rows = frame.hits.map((h) => h.row);
 const fillX = (Math.max(...cols) - Math.min(...cols) + 1) / COLS;
@@ -199,18 +169,13 @@ assert.ok(fillX >= 0.8, `node bbox covers ${(fillX * 100).toFixed(0)}% of column
 assert.ok(fillY >= 0.7, `node bbox covers ${(fillY * 100).toFixed(0)}% of rows (< 70%)`);
 ok(`nodes fill the pane: ${(fillX * 100).toFixed(0)}% of cols x ${(fillY * 100).toFixed(0)}% of rows`);
 
-/* --------------------------------------------------------------- labels -- */
-
-/** Label cap, mirrored from `grid.ts` (rule 3 of the ink-balance brief). */
 const labelCap = (c) => Math.min(24, Math.max(8, Math.round(c / 10)));
 
-/** Prominence order, mirrored from `grid.ts`. */
 const byProminence = (a, b) =>
   b.uses - a.uses || b.degree - a.degree || b.score - a.score || (a.key < b.key ? -1 : 1);
 const tailOf = (key) => (key.includes('.') ? key.slice(key.lastIndexOf('.') + 1) : key);
 const prominent = [...nodes].sort(byProminence).slice(0, labelCap(COLS));
 
-/** The tail of `key` written next to its glyph, to the right or to the left. */
 function showsLabel(n) {
   const h = cell(frame, n.key);
   if (!h) return false;
@@ -226,14 +191,8 @@ function showsLabel(n) {
 }
 const labelled = prominent.filter(showsLabel);
 const labelPct = labelled.length / prominent.length;
-// 0.75 not 0.85: labels became whole-word-only ("a half-written label reads as
-// a rendering bug"), so a node whose row has no ≥4-char free gap now stays
-// unlabelled. Measured 79.2% here (19/24); the live payload pane, checked
-// separately at the end of this file, holds 96% at 233x22.
 assert.ok(labelPct >= 0.75, `only ${(labelPct * 100).toFixed(1)}% of the top ${labelCap(COLS)} prominent nodes are labelled`);
 ok(`labels follow prominence: ${labelled.length}/${prominent.length} of the top ${labelCap(COLS)} by uses/degree/score`);
-
-/* --------------------------------------------------------------- ink mix -- */
 
 let nonSpace = 0;
 let longest = 0;
@@ -263,8 +222,6 @@ ok(
     `longest run ${longest}`,
 );
 
-/* -------------------------------------------- links are short on screen -- */
-
 const linked = [];
 for (const e of edges) linked.push([e.src_key, e.dst_key]);
 for (const l of similar) linked.push([l.src_key, l.dst_key]);
@@ -278,16 +235,11 @@ const pairMean = mean(everyPair);
 assert.ok(linkedSpan < pairMean * 0.6, `linked pairs ${linkedSpan.toFixed(1)} vs any pair ${pairMean.toFixed(1)}`);
 ok(`links are short: linked pairs ${linkedSpan.toFixed(1)} cells vs ${pairMean.toFixed(1)} for any pair`);
 
-/* --------------------------------------------------------------- focus -- */
-
 const focusKey = members.context[0];
 const focused = buildFrame(nodes, edges, COLS, ROWS, 0.1, { ...OPTS, focus: focusKey });
 const dimmed = cell(focused, members.preference[10]);
 const rolesAt = (f, r, c) =>
   f.overlays.filter((o) => o.text.split("\n")[r][c] !== " ").map((o) => o.role);
-// Dimming is a role, not a glyph swap: a dimmed node keeps its node glyph and
-// sits in the faint layer (lifted to amber inside the brightness band), so the
-// check reads the layers, not the character.
 const dimGlyph = at(focused, dimmed.row, dimmed.col);
 assert.notEqual(dimGlyph, " ", "non-neighbour lost its cell");
 const dimRoles = rolesAt(focused, dimmed.row, dimmed.col);
@@ -305,8 +257,6 @@ assert.ok(
 );
 ok("focus dims non-neighbours to faint and keeps a neighbour lit");
 
-/* --------------------------------------------------------- sparse + old -- */
-
 const bare = buildFrame(nodes, [], COLS, ROWS, 0);
 assert.equal(bare.sparse, true, 'no strands, no edges -> backdrop must draw');
 assert.ok(bare.text.includes(':'), 'backdrop hairlines missing');
@@ -315,21 +265,14 @@ ok('sparse mode: nothing survives -> dust + hairlines, honestly marked');
 const legacy = buildFrame(nodes, edges, COLS, ROWS, 0);
 const empty = buildFrame(nodes, edges, COLS, ROWS, 0, { similar: [] });
 assert.equal(legacy.text, empty.text);
-// no links at all -> the seeded field, untouched
 const seeds = new Map(nodes.map((n) => [n.key, seedPos(n, COLS, ROWS)]));
 const seeded = buildFrame(nodes, [], COLS, ROWS, 0, { similar: [], pos: seeds });
 const noLinks = buildFrame(nodes, [], COLS, ROWS, 0, { similar: [] });
 assert.equal(noLinks.text, seeded.text);
 ok('absent similar falls back to the seeded field (no throw, identical frame)');
 
-/* ============================ the real payload gates ====================== */
-
-// .opencode/patches/graph-live.json: 137 nodes, 4 declared edges, 245 similar
-// pairs. Fed the way Stage.tsx feeds it (`similar` in opts, not merged into
-// `edges`), at three panes: the narrow sidebar-ish one, the wide primary one,
-// and a short one.
 const payload = JSON.parse(
-  readFileSync(fileURLToPath(new URL('../../.opencode/patches/graph-live.json', import.meta.url)), 'utf8'),
+  readFileSync(fileURLToPath(new URL('./fixtures/graph-live.json', import.meta.url)), 'utf8'),
 );
 const PANES = [
   [94, 22],
@@ -338,12 +281,8 @@ const PANES = [
 ];
 const LINE_GLYPHS = /[-|\\/+]/;
 const VISIBLE_GLYPHS = new Set(['■', '●', '•', '·']);
-// Seven phases evenly spaced over the brightness cycle: `render` moves the band
-// 12 diagonal cells per unit of phase, so 1.6 apart is a ~19-cell step — far
-// enough that the coloured role map must differ, not just by rounding.
 const REAL_PHASES = [0, 1.6, 3.2, 4.8, 6.4, 8, 9.6];
 
-/** Effective colour role per cell, from the overlays (phase-dependent). */
 function roleSig(f) {
   const grid = f.text.split('\n').map((line) => new Array(line.length).fill('ink'));
   for (const o of f.overlays) {
@@ -371,8 +310,6 @@ for (const [c, r] of PANES) {
   }
   for (const h of f.hits) if (VISIBLE_GLYPHS.has(ls[h.row][h.col])) visible++;
   const tailCap = labelCap(c);
-  // The rule picks the top `tailCap` nodes by prominence; a name is readable
-  // when the longest prefix of its key tail (>= 2 chars) sits on one row.
   const prominentKeys = [...payload.nodes].sort(byProminence).slice(0, tailCap).map((n) => n.key);
   const drawn = new Set();
   for (const key of prominentKeys) {
@@ -390,12 +327,6 @@ for (const [c, r] of PANES) {
   assert.equal(f.hits.length, 137, `${c}x${r} hit-boxes`);
   assert.ok(linePct <= 40, `${c}x${r} line-glyph share ${linePct.toFixed(1)}% > 40%`);
   assert.ok(visible >= 120, `${c}x${r} only ${visible}/137 node glyphs visible`);
-  // A pane renders what rule 3 gave it; the brief's ">= 20 distinct labels" is
-  // the three-pane union, because a 94-col pane is capped at 9 names. Labels are
-  // now atomic (a whole name or none, never a half-written one), so the per-pane
-  // floor is what actually fits beside the glyphs: a 94-col pane packs 137 nodes
-  // at ~6 per row and a 9-char name rarely finds a free gap (measured 4), while
-  // the wide panes a user actually sees hold ~80% of their cap (measured 23/24).
   const floor = c < 140 ? 4 : Math.min(12, tailCap) * 0.8;
   assert.ok(
     labels.length >= floor,
@@ -404,7 +335,6 @@ for (const [c, r] of PANES) {
   for (const l of labels) allLabels.add(l);
   assert.ok(occupancy >= 6 && occupancy <= 18, `${c}x${r} occupancy ${occupancy.toFixed(1)}% outside 6..18%`);
 
-  // Phase contract: text is byte-identical, brightness role moves.
   const phaseFrames = REAL_PHASES.map((p) => buildFrame(payload.nodes, payload.edges, c, r, p, { similar: payload.similar }));
   for (const p of phaseFrames) assert.equal(p.text, f.text, `${c}x${r} phase moved the layout`);
   const again = REAL_PHASES.map((p) => buildFrame(payload.nodes, payload.edges, c, r, p, { similar: payload.similar }));

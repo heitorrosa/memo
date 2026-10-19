@@ -6,11 +6,8 @@ import type { AsciiEdge, AsciiLink, AsciiNode, HitBox, Role } from './grid';
 export type AsciiStageProps = {
   nodes: AsciiNode[];
   edges: AsciiEdge[];
-  /** Cosine neighbour pairs. Absent (old server) -> hash layout, no strands. */
   similar?: AsciiLink[];
-  /** Selected memory key: it and its neighbours stay lit, the rest dims. */
   focus?: string | null;
-  /** Optional overrides. Absent -> measured from the pane. */
   cols?: number;
   rows?: number;
   fps?: number;
@@ -18,7 +15,6 @@ export type AsciiStageProps = {
   onSelect?: (key: string) => void;
 };
 
-/** Pre-measurement fallback: 12.5px monospace, the historical default. */
 const CELL0 = { charW: 7.5, lineH: 12.5, cols: 96, rows: 14 };
 
 const prefersReduced = (): boolean =>
@@ -53,9 +49,6 @@ export function AsciiStage({
   const [hits, setHits] = useState<HitBox[]>([]);
   const [measured, setMeasured] = useState(CELL0);
 
-  // Measurement pass: cell metrics from a 10-char probe, pane size from the
-  // outer box. Re-run on resize, on font load, and rAF-throttled; only commit
-  // when an integer changes so a drag does not spawn a layout storm.
   useEffect(() => {
     const outer = outerRef.current;
     const probe = measureRef.current;
@@ -100,9 +93,6 @@ export function AsciiStage({
   const rows = rowsProp ?? measured.rows;
   const { charW, lineH } = measured;
 
-  // One layout per payload: node identity, link count, the keys themselves and
-  // the pane size decide it, so phase, focus and toasts never pay for a
-  // relaxation pass. The layout is a fixed chart, not a rotating field.
   const signature = useMemo(
     () =>
       `${nodes.length}:${edges.length}:${similar.length}:${nodes.reduce(
@@ -151,8 +141,6 @@ export function AsciiStage({
       raf = requestAnimationFrame(step);
       const dt = (now - last) / 1000;
       last = now;
-      // rad/s: the brightness band slides 12 cells per radian (about 25s
-      // across a 243x22 pane). Nothing else moves.
       phase += dt * 0.9;
       if (now - lastDraw >= interval) {
         lastDraw = now;
@@ -183,7 +171,6 @@ export function AsciiStage({
     };
   }, [cols, rows, fps, onSelect]);
 
-  // Static (reduced-motion) path still tracks prop changes.
   useEffect(() => {
     drawRef.current();
   }, [nodes, edges, similar, focus, points]);
@@ -197,13 +184,9 @@ export function AsciiStage({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        // min-width 0 + max-width 100% keep the exact-size child from inflating
-        // an ancestor auto track (which used to strand the art off-pane).
         width: '100%',
         minWidth: 0,
         maxWidth: '100%',
-        // height 100% is load-bearing: an auto-height outer is sized BY the
-        // exact-size child, so the row count would confirm its own guess.
         height: '100%',
         overflow: 'hidden',
         fontFamily: 'var(--font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace)',
@@ -218,8 +201,6 @@ export function AsciiStage({
       >
         0000000000
       </span>
-      {/* Exact box: one child sized cols x rows cells, so the hit layer's
-          percentages are percentages of the grid, not of the pane. */}
       <div style={{ position: 'relative', width: cols * charW, height: rows * lineH }}>
         <pre ref={baseRef} aria-hidden="true" style={{ ...CELL, position: 'relative', color: ROLE_VAR.ink }} />
         {OVERLAY_ROLES.map((role) => (

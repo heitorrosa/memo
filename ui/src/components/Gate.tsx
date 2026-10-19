@@ -3,10 +3,6 @@ import { LogoArt } from "../ascii/LogoArt";
 import { Wordmark } from "./Frame";
 import { useAutoFocus } from "../hooks/useHotkeys";
 
-/**
- * Full-screen token gate. Nothing renders behind it: no data is fetched until
- * a token is stored.
- */
 export function Gate({
   onConnect,
   message,
