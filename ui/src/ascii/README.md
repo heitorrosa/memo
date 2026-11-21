@@ -180,7 +180,7 @@ memory, and what it is close to".
   a lie about the data, so it is drawn as something obviously not a relation,
   and the real nodes and strands read bright on top of it. `Frame.sparse` says
   whether it was on.
-- 0 nodes → a deterministic generated field of 44 pseudo-nodes that still breathes.
+- 0 nodes → no fabricated nodes or labels: only the sparse backdrop texture.
 - `similar` absent or empty, or fewer than 3 nodes → `layout` returns the hash
   seeds untouched, so an old server draws exactly the frame it drew before.
 - > 200 nodes → the top 200 by degree, then uses; edges survive only if both ends do.

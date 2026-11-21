@@ -479,24 +479,6 @@ function drawBackdrop(buf: CellBuf, cols: number, rows: number): void {
   }
 }
 
-const EMPTY_FIELD = 44;
-
-function synthField(): AsciiNode[] {
-  const out: AsciiNode[] = [];
-  for (let i = 0; i < EMPTY_FIELD; i++) {
-    const r = rng(hashKey(`field:${i}`));
-    out.push({
-      key: `field:${i}`,
-      type: 'field',
-      status: 'current',
-      uses: Math.floor(r() * 12),
-      score: r(),
-      degree: Math.floor(r() * 6),
-    });
-  }
-  return out;
-}
-
 function selectNodes(nodes: AsciiNode[]): AsciiNode[] {
   if (nodes.length <= MAX_NODES) return nodes;
   return [...nodes].sort((a, b) => b.degree - a.degree || b.uses - a.uses).slice(0, MAX_NODES);
@@ -571,7 +553,7 @@ export function buildFrame(
       linked.set(s.dst_key, (linked.get(s.dst_key) ?? 0) + 1);
     }
   }
-  const list = (synthetic ? synthField() : selected).map((n) => ({
+  const list = selected.map((n) => ({
     ...n,
     degree: n.degree + (linked.get(n.key) ?? 0),
   }));

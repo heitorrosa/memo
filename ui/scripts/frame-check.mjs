@@ -262,6 +262,12 @@ assert.equal(bare.sparse, true, 'no strands, no edges -> backdrop must draw');
 assert.ok(bare.text.includes(':'), 'backdrop hairlines missing');
 ok('sparse mode: nothing survives -> dust + hairlines, honestly marked');
 
+const emptyFrame = buildFrame([], [], COLS, ROWS, 0);
+assert.equal(emptyFrame.sparse, true, 'empty graph must be sparse');
+assert.equal(emptyFrame.hits.length, 0, 'empty graph must have no hit-boxes');
+assert.ok(!emptyFrame.text.includes('field:'), 'empty graph must not fabricate field:N nodes');
+ok('empty graph: no synthetic field nodes, no hits, sparse backdrop only');
+
 const legacy = buildFrame(nodes, edges, COLS, ROWS, 0);
 const empty = buildFrame(nodes, edges, COLS, ROWS, 0, { similar: [] });
 assert.equal(legacy.text, empty.text);
